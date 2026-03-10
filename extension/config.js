@@ -50,6 +50,13 @@ const NCTRACKS_CONFIG = {
   // Eligibility form selectors — based on actual NCTracks "Verify Recipient" page
   // The page uses table-based layout with labels in preceding <td> cells.
   // Element IDs may be dynamic (JSF-style), so we use multiple fallback strategies.
+  // Flow: Account Information → Group → NPI / Atypical ID (cascading dropdowns)
+  ACCOUNT_SELECTORS: [
+    'select[name*="account" i]',
+    'select[id*="account" i]',
+    'select[name*="Account"]',
+    'select[id*="Account"]',
+  ],
   GROUP_SELECTORS: [
     'select[name*="group" i]',
     'select[id*="group" i]',
@@ -85,6 +92,8 @@ const NCTRACKS_CONFIG = {
     'input[name*="ServiceStart" i]',
   ],
   DOS_TO_SELECTORS: [
+    'input[id="txtDateOfServiceEnd"]',
+    'input[id*="txtDateOfServiceEnd"]',
     'input[id="DateOfServiceEnd"]',
     'input[id*="DateOfServiceEnd"]',
     'input[id*="dateOfServiceEnd" i]',

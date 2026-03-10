@@ -388,58 +388,124 @@
 
       // Click Clear to reset form (try config selectors first, then discover)
       let clearBtn = findElement(CFG.CLEAR_SELECTORS);
-      if (!clearBtn) clearBtn = findButtonByLabel(elements, ["clear"]);
+      if (!clearBtn) clearBtn = findButtonByLabel(elements, ["^clear$"]);
       if (clearBtn) {
         clearBtn.click();
         await delay(1000);
-        // Re-discover after clear since options may have reset
       }
 
-      // Set Group dropdown — try config selectors, then discover by label
-      let groupSelect = findElement(CFG.GROUP_SELECTORS);
-      if (!groupSelect) groupSelect = findByLabel(elements, ["group", "provider.*group", "grp"], "select");
-      if (groupSelect) {
-        const groupValue = config.defaultGroup || CFG.DEFAULT_GROUP;
-        const groupSet = setSelect(groupSelect, groupValue);
-        if (!groupSet) {
-          diagnostics.push(`Group "${groupValue}" not found in dropdown`);
-          const options = Array.from(groupSelect.options).map((o) => `${o.value}="${o.text.trim()}"`).filter((v) => !v.startsWith("="));
-          if (options.length > 0) {
-            diagnostics.push(`Available groups: ${options.slice(0, 8).join(", ")}`);
-          }
+      // ── Step 1: Account Information (first dropdown — cascades to Group) ──
+      let accountSelect = findElement(CFG.ACCOUNT_SELECTORS);
+      if (!accountSelect) accountSelect = findByLabel(elements, ["account.*info", "account"], "select");
+      if (accountSelect) {
+        // If it has options but nothing selected (or first option is blank), pick the first real option
+        const realOptions = Array.from(accountSelect.options).filter((o) => o.value && o.value !== "");
+        if (realOptions.length > 0 && (!accountSelect.value || accountSelect.value === "")) {
+          accountSelect.value = realOptions[0].value;
+          accountSelect.dispatchEvent(new Event("change", { bubbles: true }));
+          diagnostics.push(`Account set to: "${realOptions[0].text.trim()}" (${realOptions[0].value})`);
+          await delay(2000); // Wait for Group dropdown to populate after Account change
+        } else if (accountSelect.value) {
+          diagnostics.push(`Account already set: "${accountSelect.options[accountSelect.selectedIndex]?.text || accountSelect.value}"`);
         }
-        await delay(1500); // Wait for dependent dropdowns to populate
+      } else {
+        diagnostics.push("Account dropdown not found");
+      }
+
+      // ── Step 2: Group dropdown (cascades to NPI) ──
+      let groupSelect = findElement(CFG.GROUP_SELECTORS);
+      if (!groupSelect) groupSelect = findByLabel(elements, ["^\\*?\\s*group", "provider.*group"], "select");
+      // Re-discover since Account change may have added new selects
+      if (!groupSelect) {
+        document.querySelectorAll("select").forEach((sel) => {
+          const lbl = findLabelFor(sel);
+          if (/group/i.test(lbl) && sel !== accountSelect) groupSelect = sel;
+        });
+      }
+      if (groupSelect) {
+        // Wait for Group options to populate (depends on Account selection)
+        try {
+          await waitFor(() => {
+            const opts = Array.from(groupSelect.options).filter((o) => o.value && o.value !== "" && o.text.trim().toLowerCase() !== "choose");
+            return opts.length > 0;
+          }, 5000, 500);
+        } catch {
+          diagnostics.push("Group dropdown did not populate within 5 seconds");
+        }
+
+        const groupValue = config.defaultGroup || CFG.DEFAULT_GROUP;
+        let groupSet = setSelect(groupSelect, groupValue);
+
+        // If exact match failed, try selecting first real option
+        if (!groupSet) {
+          const realOpts = Array.from(groupSelect.options).filter((o) => o.value && o.value !== "" && o.text.trim().toLowerCase() !== "choose");
+          if (realOpts.length === 1) {
+            // Only one real option — select it
+            groupSelect.value = realOpts[0].value;
+            groupSelect.dispatchEvent(new Event("change", { bubbles: true }));
+            groupSet = true;
+            diagnostics.push(`Group auto-selected (only option): "${realOpts[0].text.trim()}"`);
+          } else if (realOpts.length > 1) {
+            diagnostics.push(`Group "${groupValue}" not found. Available: ${realOpts.slice(0, 5).map((o) => `"${o.text.trim()}"(${o.value})`).join(", ")}`);
+            // Try first option as fallback
+            groupSelect.value = realOpts[0].value;
+            groupSelect.dispatchEvent(new Event("change", { bubbles: true }));
+            groupSet = true;
+            diagnostics.push(`Group fallback to first option: "${realOpts[0].text.trim()}"`);
+          } else {
+            diagnostics.push("Group dropdown has no selectable options");
+          }
+        } else {
+          diagnostics.push(`Group matched: "${groupSelect.options[groupSelect.selectedIndex]?.text || groupValue}"`);
+        }
+
+        await delay(2000); // Wait for NPI dropdown to populate after Group change
       } else {
         diagnostics.push("Group dropdown not found on page");
-        // If there's only one select with options, it might be the group
-        const populatedSelects = elements.selects.filter((s) => s.optionCount > 1);
-        if (populatedSelects.length > 0) {
-          diagnostics.push(`Found ${populatedSelects.length} populated select(s) — first has ${populatedSelects[0].optionCount} options`);
-        }
       }
 
-      // Set NPI dropdown — try config selectors, then discover by label
+      // ── Step 3: NPI / Atypical ID dropdown ──
       let npiSelect = findElement(CFG.NPI_SELECTORS);
-      if (!npiSelect) npiSelect = findByLabel(elements, ["npi", "provider.*npi", "atypical", "servicing", "rendering"], "select");
+      if (!npiSelect) npiSelect = findByLabel(elements, ["npi", "atypical"], "select");
+      // Re-discover if needed
+      if (!npiSelect) {
+        document.querySelectorAll("select").forEach((sel) => {
+          const lbl = findLabelFor(sel);
+          if ((/npi/i.test(lbl) || /atypical/i.test(lbl)) && sel !== accountSelect && sel !== groupSelect) {
+            npiSelect = sel;
+          }
+        });
+      }
       if (npiSelect) {
-        // Wait for options to populate (they depend on group selection)
+        // Wait for options to populate (depends on Group selection)
         try {
-          await waitFor(() => npiSelect.options.length > 1, 8000, 500);
+          await waitFor(() => npiSelect.options.length > 1, 10000, 500);
         } catch {
-          diagnostics.push("NPI dropdown did not populate within 8 seconds");
-          // Re-discover to see current state
+          diagnostics.push("NPI dropdown did not populate within 10 seconds");
           const currentOpts = Array.from(npiSelect.options).map((o) => `${o.value}="${o.text.trim()}"`);
-          diagnostics.push(`NPI options now: [${currentOpts.join(", ")}]`);
+          diagnostics.push(`NPI options: [${currentOpts.join(", ")}]`);
         }
 
         const npiValue = config.defaultNpi || CFG.DEFAULT_NPI;
-        const npiSet = setSelect(npiSelect, npiValue);
+        let npiSet = setSelect(npiSelect, npiValue);
         if (!npiSet) {
-          diagnostics.push(`NPI "${npiValue}" not found in dropdown`);
-          const options = Array.from(npiSelect.options).map((o) => `${o.value}="${o.text.trim()}"`).filter((v) => !v.startsWith("="));
-          if (options.length > 0) {
-            diagnostics.push(`Available NPIs: ${options.slice(0, 8).join(", ")}`);
+          // Try selecting first real option as fallback
+          const realOpts = Array.from(npiSelect.options).filter((o) => o.value && o.value !== "");
+          if (realOpts.length === 1) {
+            npiSelect.value = realOpts[0].value;
+            npiSelect.dispatchEvent(new Event("change", { bubbles: true }));
+            diagnostics.push(`NPI auto-selected (only option): "${realOpts[0].text.trim()}"`);
+          } else if (realOpts.length > 1) {
+            diagnostics.push(`NPI "${npiValue}" not found. Available: ${realOpts.slice(0, 5).map((o) => `"${o.text.trim()}"(${o.value})`).join(", ")}`);
+            // Select first as fallback
+            npiSelect.value = realOpts[0].value;
+            npiSelect.dispatchEvent(new Event("change", { bubbles: true }));
+            diagnostics.push(`NPI fallback to first: "${realOpts[0].text.trim()}"`);
+          } else {
+            diagnostics.push("NPI has no selectable options");
           }
+        } else {
+          diagnostics.push(`NPI matched: "${npiSelect.options[npiSelect.selectedIndex]?.text || npiValue}"`);
         }
         await delay(500);
       } else {
@@ -549,14 +615,19 @@
       }
       await delay(300);
 
-      // Click Check Eligibility — try config selectors, then discover
+      // Click Check Eligibility — specifically search for this button, NOT generic "Search" nav links
       let checkBtn = findElement(CFG.CHECK_ELIGIBILITY_SELECTORS);
-      if (!checkBtn) checkBtn = findButtonByLabel(elements, ["check.*elig", "eligib", "verify", "search", "submit", "inquiry"]);
+      if (!checkBtn) checkBtn = findButtonByLabel(elements, ["check.*elig"]);
       if (!checkBtn) {
+        // Search specifically for buttons/links with "Check Eligibility" text
         checkBtn = findButtonWithText(
-          ["button", "input[type='submit']", "a.btn", "a"],
-          ["Check Eligibility", "Check", "Search", "Submit", "Verify", "Inquiry"]
+          ["input[type='submit']", "input[type='button']", "button", "a"],
+          ["Check Eligibility"]
         );
+      }
+      if (!checkBtn) {
+        // Broader fallback — but NOT "Search" which is a nav element
+        checkBtn = findButtonByLabel(elements, ["eligib", "verify"]);
       }
 
       if (!checkBtn) {
