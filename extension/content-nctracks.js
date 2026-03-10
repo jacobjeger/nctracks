@@ -58,6 +58,13 @@
 
   function setSelect(el, value) {
     if (!el || !el.options) return false;
+    // Skip placeholder options (empty value, "Choose", "Select", etc.)
+    const isPlaceholder = (opt) => {
+      const v = opt.value.trim();
+      const t = opt.text.trim().toLowerCase();
+      return !v || t === "choose" || t === "select" || t === "-- select --" || t === "";
+    };
+
     // Try exact match on value
     for (const opt of el.options) {
       if (opt.value === value) {
@@ -66,8 +73,9 @@
         return true;
       }
     }
-    // Try partial match on value or text
+    // Try partial match on value or text (skip placeholders)
     for (const opt of el.options) {
+      if (isPlaceholder(opt)) continue;
       if (opt.value.includes(value) || opt.text.includes(value) ||
           value.includes(opt.value) || value.includes(opt.text)) {
         el.value = opt.value;
@@ -75,9 +83,10 @@
         return true;
       }
     }
-    // Try case-insensitive match
+    // Try case-insensitive match (skip placeholders)
     const lowerValue = value.toLowerCase();
     for (const opt of el.options) {
+      if (isPlaceholder(opt)) continue;
       if (opt.value.toLowerCase().includes(lowerValue) || opt.text.toLowerCase().includes(lowerValue)) {
         el.value = opt.value;
         el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -276,13 +285,14 @@
       });
     });
 
-    // Catalog buttons/submit inputs AND clickable links (NCTracks uses <a> tags as buttons)
-    document.querySelectorAll("input[type='submit'], input[type='button'], button, a[href]").forEach((btn) => {
+    // Catalog buttons/submit inputs AND clickable elements
+    // NCTracks uses <a>, <input>, <button>, and sometimes <span> as action triggers
+    document.querySelectorAll("input[type='submit'], input[type='button'], button, a, span[onclick]").forEach((btn) => {
       const text = (btn.textContent || "").trim();
       const value = btn.value || "";
-      // Skip nav links and tiny links — only include ones that look like action buttons
-      if (btn.tagName === "A" && !text && !value) return;
-      if (btn.tagName === "A" && text.length > 40) return; // Skip long nav text
+      // Skip empty links and long nav text
+      if ((btn.tagName === "A" || btn.tagName === "SPAN") && !text && !value) return;
+      if ((btn.tagName === "A" || btn.tagName === "SPAN") && text.length > 40) return;
       elements.buttons.push({
         el: btn,
         id: btn.id || "",
