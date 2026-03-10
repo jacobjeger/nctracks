@@ -1277,15 +1277,14 @@
         const emrSource = r.emr_funding_source || "";
         const entity = r.managing_entity || "";
         const entityNext = r.managing_entity_next || "";
-        // If no insurance found anywhere, write "None" in insurance and changed columns
-        const noInsurance = (!emrSource || emrSource === "(none)") &&
-          (!entity || entity === "(none)") &&
-          (!entityNext || entityNext === "(none)");
+        // If NCTracks shows no insurance, write "None" in entity and changed columns
+        const noEntity = !entity || entity === "(none)";
+        const noEntityNext = !entityNext || entityNext === "(none)";
         wsData.push([
           r.medicaid_id, r.name, r.status,
-          noInsurance ? "None" : emrSource, r.insurance_type || "",
-          noInsurance ? "None" : entity, r.current_period || r.coverage_dates || "", noInsurance ? "None" : (r.payer_changed || ""),
-          noInsurance ? "None" : entityNext, r.next_period || "", noInsurance ? "None" : (r.payer_changed_next || ""),
+          emrSource, r.insurance_type || "",
+          noEntity ? "None" : entity, r.current_period || r.coverage_dates || "", noEntity ? "None" : (r.payer_changed || ""),
+          noEntityNext ? "None" : entityNext, r.next_period || "", noEntityNext ? "None" : (r.payer_changed_next || ""),
           r.checked_at, r.notes || "",
         ]);
       }
