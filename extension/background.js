@@ -150,7 +150,7 @@ function isTabAlive(tabId) {
   });
 }
 
-async function ensureTab() {
+async function ensureTab(url) {
   if (state.tabId) {
     const alive = await isTabAlive(state.tabId);
     if (alive) return state.tabId;
@@ -158,24 +158,13 @@ async function ensureTab() {
   }
 
   return new Promise((resolve, reject) => {
-    // Open in a new window so it doesn't get lost behind the popup
-    chrome.windows.create({ url: "about:blank", focused: true, type: "normal" }, (win) => {
+    chrome.tabs.create({ url: url || "about:blank", active: true }, (tab) => {
       if (chrome.runtime.lastError) {
-        // Fallback to a tab if window creation fails
-        chrome.tabs.create({ url: "about:blank", active: true }, (tab) => {
-          if (chrome.runtime.lastError) {
-            reject(new Error("Failed to create tab: " + chrome.runtime.lastError.message));
-            return;
-          }
-          state.tabId = tab.id;
-          addLog(`Opened new tab (id: ${tab.id})`);
-          resolve(tab.id);
-        });
+        reject(new Error("Failed to create tab: " + chrome.runtime.lastError.message));
         return;
       }
-      const tab = win.tabs[0];
       state.tabId = tab.id;
-      addLog(`Opened new window (tab id: ${tab.id})`);
+      addLog(`Opened tab (id: ${tab.id})`);
       resolve(tab.id);
     });
   });
@@ -309,13 +298,20 @@ function waitForTabUrl(tabId, urlTest, timeoutMs = 60000) {
 let keepalivePorts = new Set();
 
 function startKeepalive() {
-  // Alarm-based keepalive (safety net — minimum 30s in MV3)
-  chrome.alarms.create("keepalive", { periodInMinutes: 0.5 });
+  try {
+    chrome.alarms.create("keepalive", { periodInMinutes: 0.5 });
+  } catch (e) {
+    // alarms API may not be available
+  }
 }
 
 function stopKeepalive() {
-  chrome.alarms.clear("keepalive");
-  chrome.alarms.clear("mfa-timeout");
+  try {
+    chrome.alarms.clear("keepalive");
+    chrome.alarms.clear("mfa-timeout");
+  } catch {
+    // ignore
+  }
 }
 
 // Port-based keepalive: content scripts connect and hold a port open,
@@ -374,16 +370,18 @@ async function startLogin() {
     state.pendingPassword = state.credentials.password;
     saveState();
     sendProgress();
-    addLog("Navigating to NCTracks login...");
+    addLog("Opening NCTracks login page...");
 
-    await ensureTab();
+    // Create tab directly with the login URL (or reuse existing tab)
+    const tabAlive = state.tabId && await isTabAlive(state.tabId);
+    if (tabAlive) {
+      chrome.tabs.update(state.tabId, { url: PROVIDER_PORTAL_LOGIN, active: true });
+    } else {
+      await ensureTab(PROVIDER_PORTAL_LOGIN);
+    }
 
-    // Navigate to the login page — the content script will auto-inject
-    // on the NCID page and send ncidPageReady, which triggers credential filling
-    chrome.tabs.update(state.tabId, { url: PROVIDER_PORTAL_LOGIN });
-    addLog("Waiting for login page...");
-
-    // Wait for the page to reach NCID or NCTracks
+    // Wait for NCID or NCTracks to appear
+    addLog("Waiting for redirect to NCID...");
     let finalUrl = "";
     try {
       finalUrl = await waitForTabUrl(
@@ -391,61 +389,59 @@ async function startLogin() {
         (url) => url.includes("ncid.nc.gov") || url.includes("nctracks.nc.gov"),
         TAB_LOAD_TIMEOUT_MS
       );
-      addLog("Redirected to: " + finalUrl);
+      addLog("Page reached: " + finalUrl.substring(0, 80));
     } catch {
       const tab = await chrome.tabs.get(state.tabId);
       finalUrl = tab.url || "";
-      addLog("URL after timeout: " + finalUrl);
-      if (finalUrl === "about:blank" || finalUrl.startsWith("chrome://")) {
-        broadcastError("login_failed", "Login page failed to load. Check your internet connection.");
-        return;
-      }
+      addLog("Timeout — current URL: " + finalUrl.substring(0, 80));
     }
 
-    // Wait for page to finish loading
+    // Wait for full page load
     try {
       await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
     } catch {
-      addLog("Page load timeout — continuing anyway");
+      addLog("Page load timed out — continuing");
     }
 
-    // Check if already logged in (landed on NCTracks, not login page)
+    await delay(1000);
+
+    // Check where we ended up
     const tab = await chrome.tabs.get(state.tabId);
     const url = (tab.url || "").toLowerCase();
+    addLog("Current URL: " + tab.url.substring(0, 80));
+
+    // Already logged in?
     if (url.includes("nctracks.nc.gov") && !url.includes("loginaction")) {
-      addLog("Already logged in — skipping login.");
+      addLog("Already logged in.");
       await navigateToEligibility();
       processNextPatient();
       return;
     }
 
-    // The content script should have already sent ncidPageReady by now,
-    // which triggers the ncidPageReady handler to send credentials.
-    // But as a safety net, also try sending directly after a delay.
-    await delay(2000);
-
+    // Send credentials to the content script on the NCID page
+    // The ncidPageReady handler also sends credentials as a backup
+    addLog("Sending credentials to login page...");
     try {
       await sendToTab(state.tabId, {
         action: "fillLogin",
         username: state.credentials.username,
         password: state.credentials.password,
       }, 8);
-      addLog("Credentials sent to login page.");
+      addLog("Credentials delivered.");
     } catch (err) {
-      addLog("Failed to reach content script: " + err.message);
+      addLog("Content script unreachable: " + err.message);
 
       if (state.loginRetryCount < 2) {
         state.loginRetryCount++;
-        addLog(`Retrying login (attempt ${state.loginRetryCount + 1})...`);
+        addLog("Retrying login (attempt " + (state.loginRetryCount + 1) + ")...");
         await delay(3000);
-        await startLogin();
-        return;
+        return startLogin();
       }
 
       broadcastError("login_failed", "Could not communicate with login page: " + err.message);
     }
   } catch (err) {
-    addLog("Login flow error: " + err.message);
+    addLog("Login error: " + err.message);
     broadcastError("login_failed", err.message);
   }
 }
@@ -887,12 +883,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
   }
 
-  return true; // keep message channel open
-});
+  // ── Credentials Storage ──
 
-// ─── Credentials Storage ───
-
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === "saveCredentials") {
     chrome.storage.local.set({
       savedUsername: msg.username,
@@ -900,6 +892,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     sendResponse({ saved: true });
   }
+
   if (msg.action === "loadCredentials") {
     chrome.storage.local.get(["savedUsername", "savedPassword"], (data) => {
       sendResponse({
@@ -907,13 +900,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         password: data.savedPassword || "",
       });
     });
-    return true;
+    return true; // async response
   }
+
   if (msg.action === "clearCredentials") {
     chrome.storage.local.remove(["savedUsername", "savedPassword"]);
     sendResponse({ cleared: true });
   }
-  return true;
+
+  return true; // keep message channel open
 });
 
 // ─── Service Worker Startup Recovery ───

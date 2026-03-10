@@ -8,7 +8,8 @@
     "activeTab",
     "tabs",
     "downloads",
-    "notifications"
+    "notifications",
+    "alarms"
   ],
   "host_permissions": [
     "https://*.nctracks.nc.gov/*",
@@ -16,8 +17,7 @@
     "https://*.ncid.nc.gov/*"
   ],
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
   "action": {
     "default_popup": "popup.html",
