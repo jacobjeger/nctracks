@@ -9,6 +9,43 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from config import OUTPUT_COLUMNS, INPUT_COLUMNS
 
 
+def generate_template(save_path: str) -> str:
+    """Generate a blank patient list template Excel file.
+
+    Creates an .xlsx with the required column headers and an example row.
+    Returns the saved file path.
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Patient List"
+
+    # Header styling
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill(start_color="2F5496", end_color="2F5496", fill_type="solid")
+    header_align = Alignment(horizontal="center", wrap_text=True)
+
+    for col_idx, header in enumerate(INPUT_COLUMNS, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+
+    # Example row to show expected format
+    example = ["1234567890", "John", "Doe", "01/15/1990"]
+    for col_idx, val in enumerate(example, 1):
+        cell = ws.cell(row=2, column=col_idx, value=val)
+        cell.font = Font(italic=True, color="888888")
+
+    # Auto-width columns
+    for col in ws.columns:
+        col_letter = col[0].column_letter
+        max_len = max(len(str(c.value or "")) for c in col)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 15)
+
+    wb.save(save_path)
+    return save_path
+
+
 def load_patients(file_path: str) -> list[dict]:
     """Load patient list from Excel (.xlsx) or CSV (.csv) file.
 

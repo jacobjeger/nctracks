@@ -9,7 +9,7 @@ import logging
 import keyring
 
 import config
-from data import load_patients, save_results, generate_output_path
+from data import load_patients, save_results, generate_output_path, generate_template
 from automation import NCTracksAutomation
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,9 @@ class NCTracksVerifierApp:
             side=tk.LEFT, fill=tk.X, expand=True
         )
         ttk.Button(file_frame, text="Browse...", command=self._browse_file).pack(
+            side=tk.LEFT, padx=(10, 0)
+        )
+        ttk.Button(file_frame, text="Download Template", command=self._download_template).pack(
             side=tk.LEFT, padx=(10, 0)
         )
 
@@ -158,6 +161,27 @@ class NCTracksVerifierApp:
             except Exception as e:
                 self.patient_count_var.set("Error loading file")
                 messagebox.showerror("File Error", str(e))
+
+    def _download_template(self):
+        """Save a blank patient list template file."""
+        path = filedialog.asksaveasfilename(
+            title="Save Patient List Template",
+            defaultextension=".xlsx",
+            initialfile="patient_template.xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+        )
+        if path:
+            try:
+                generate_template(path)
+                self._log(f"Template saved to {path}")
+                messagebox.showinfo(
+                    "Template Saved",
+                    f"Patient list template saved to:\n{path}\n\n"
+                    "Fill in the Medicaid ID column (required).\n"
+                    "First Name, Last Name, and DOB are optional.",
+                )
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not save template: {e}")
 
     def _validate_inputs(self) -> bool:
         """Validate that all required inputs are provided."""
