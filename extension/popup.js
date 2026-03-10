@@ -134,6 +134,7 @@
   togglePasswordBtn.addEventListener("click", () => {
     const isPassword = passwordInput.type === "password";
     passwordInput.type = isPassword ? "text" : "password";
+    passwordInput.classList.toggle("password-visible", isPassword);
     togglePasswordBtn.title = isPassword ? "Hide password" : "Show password";
   });
 

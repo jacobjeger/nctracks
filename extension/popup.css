@@ -37,8 +37,6 @@
 body {
   width: 420px;
   min-height: 300px;
-  max-height: 600px;
-  overflow-y: auto;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
   font-size: 13px;
   line-height: 1.5;
@@ -282,56 +280,7 @@ body::-webkit-scrollbar-thumb {
   letter-spacing: 0.03em;
 }
 
-.input-wrapper {
-  position: relative;
-}
-
-.input-wrapper input {
-  width: 100%;
-  padding: 8px 10px 8px 34px;
-  border: 1px solid var(--gray-300);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
-  color: var(--gray-800);
-  background: white;
-  outline: none;
-  transition: border-color var(--transition), box-shadow var(--transition);
-}
-.input-wrapper input:focus {
-  border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
-.input-wrapper input.input-error {
-  border-color: var(--danger);
-  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
-}
-
-.input-icon {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 15px;
-  height: 15px;
-  color: var(--gray-400);
-  pointer-events: none;
-}
-
-.toggle-password {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 2px;
-  color: var(--gray-400);
-  display: flex;
-}
-.toggle-password:hover { color: var(--gray-600); }
-.eye-icon { width: 16px; height: 16px; }
-
+/* Base input styles (before wrapper overrides) */
 input[type="text"],
 input[type="password"],
 input[type="number"] {
@@ -351,6 +300,55 @@ input[type="number"]:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
+
+.input-wrapper {
+  position: relative;
+}
+
+/* Override padding for inputs with icons */
+.input-wrapper input[type="text"],
+.input-wrapper input[type="password"] {
+  padding-left: 34px;
+}
+
+/* Extra right padding for password field with toggle button */
+.input-wrapper input[type="password"],
+.input-wrapper input[type="text"].password-visible {
+  padding-right: 36px;
+}
+
+.input-wrapper input.input-error {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
+}
+
+.input-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  color: var(--gray-400);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.toggle-password {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  color: var(--gray-400);
+  display: flex;
+  z-index: 1;
+}
+.toggle-password:hover { color: var(--gray-600); }
+.eye-icon { width: 16px; height: 16px; }
 
 .input-sm {
   max-width: 100px;
