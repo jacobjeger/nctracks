@@ -407,19 +407,26 @@
     let fundingApplied = false;
     const targetSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
 
-    // For a multi-select, we need to open the dropdown and select each source
+    // For a Mantine multi-select, click the search input to open dropdown,
+    // then click each option. Mantine MultiSelect keeps the dropdown open
+    // between selections, but we re-check and re-open if needed.
     const fundingTrigger = await findAndClickFilterDropdown("Funding sources");
     if (!fundingTrigger) {
       diagnostics.push("Funding Sources filter dropdown not found");
     } else {
       await delay(1000);
-
-      // Log the Mantine dropdown portal content
       logMantineDropdown();
 
       let selectedCount = 0;
       for (const sourceName of targetSources) {
-        const option = findMantineOption(sourceName);
+        // Check if dropdown is still open; re-open if not
+        let option = findMantineOption(sourceName);
+        if (!option) {
+          log(`Option "${sourceName}" not visible, re-opening dropdown...`);
+          clickElement(fundingTrigger);
+          await delay(800);
+          option = findMantineOption(sourceName);
+        }
         if (option) {
           clickElement(option);
           selectedCount++;
@@ -427,6 +434,7 @@
           await delay(500);
         } else {
           log(`Could not find funding source option: "${sourceName}"`);
+          diagnostics.push(`Funding source not found: "${sourceName}"`);
         }
       }
 
@@ -435,8 +443,8 @@
         log(`Selected ${selectedCount}/${targetSources.length} funding sources`);
       }
 
-      // Close the dropdown by pressing Escape or clicking outside
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      // Close the dropdown by pressing Escape
+      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await delay(500);
     }
 
@@ -509,54 +517,63 @@
   // Options use classes like mantine-Combobox-option, and the dropdown container
   // uses mantine-Combobox-dropdown or similar.
 
-  // Find a filter dropdown by label text and click it open
+  // Find a filter dropdown by label text and click it open.
+  // Mantine MultiSelect/Select: <label for="mantine-xxx"> links to <input id="mantine-xxx">.
+  // Clicking/focusing that input opens the dropdown.
   async function findAndClickFilterDropdown(labelText) {
     log(`Looking for filter dropdown labeled "${labelText}"...`);
 
-    // Find the label element in the filter panel
-    const allTextEls = document.querySelectorAll("label, p, span, div");
-    for (const el of allTextEls) {
-      const text = (el.textContent || el.innerText || "").trim();
-      if (text.length > 30 || !new RegExp(`^${escapeRegex(labelText)}$`, "i").test(text)) continue;
+    // Strategy A: Use label[for] to find the linked input directly
+    const labels = document.querySelectorAll("label");
+    for (const lbl of labels) {
+      const text = (lbl.textContent || "").trim();
+      if (!new RegExp(`^${escapeRegex(labelText)}$`, "i").test(text)) continue;
 
-      log(`Found label "${text}" (tag=${el.tagName}, class="${(el.className || "").substring(0, 60)}")`);
+      log(`Found label "${text}" (tag=${lbl.tagName}, for="${lbl.getAttribute("for") || ""}")`);
 
-      // Look upward and sideways for the clickable trigger
-      const parent = el.parentElement;
-      if (!parent) continue;
-
-      // Mantine uses buttons with class "mantine-*" as triggers
-      const candidates = parent.querySelectorAll(
-        "button, input, [role='combobox'], [class*='mantine-InputWrapper'], [class*='mantine-Input-input'], [class*='mantine-Select'], [class*='mantine-MultiSelect']"
-      );
-      log(`  Trigger candidates near label: ${candidates.length}`);
-      for (let i = 0; i < candidates.length; i++) {
-        const c = candidates[i];
-        log(`  Candidate ${i}: tag=${c.tagName} class="${(c.className || "").substring(0, 50)}" type="${c.type || ""}"`);
-      }
-
-      if (candidates.length > 0) {
-        const trigger = candidates[0];
-        log(`Clicking dropdown trigger: tag=${trigger.tagName} class="${(trigger.className || "").substring(0, 50)}"`);
-        clickElement(trigger);
-        return trigger;
-      }
-
-      // Also try: the parent's parent (filter row container)
-      const grandparent = parent.parentElement;
-      if (grandparent) {
-        const gpCandidates = grandparent.querySelectorAll("button, input, [role='combobox']");
-        if (gpCandidates.length > 0) {
-          log(`Found trigger in grandparent: tag=${gpCandidates[0].tagName}`);
-          clickElement(gpCandidates[0]);
-          return gpCandidates[0];
+      const forId = lbl.getAttribute("for");
+      if (forId) {
+        const linkedInput = document.getElementById(forId);
+        if (linkedInput) {
+          log(`Found linked input by for="${forId}": tag=${linkedInput.tagName} type="${linkedInput.type || ""}"`);
+          clickElement(linkedInput);
+          return linkedInput;
         }
       }
 
-      // Just click the parent
-      log(`Clicking parent container of "${labelText}" label`);
-      clickElement(parent);
-      return parent;
+      // Fallback: find input inside the same wrapper (label's parent)
+      const parent = lbl.parentElement;
+      if (!parent) continue;
+
+      // Look for search input inside a Mantine MultiSelect/Select wrapper
+      const searchInput = parent.querySelector('input[type="search"], input[class*="mantine-MultiSelect-searchInput"], input[class*="mantine-Select-input"]');
+      if (searchInput) {
+        log(`Found search input in parent: class="${(searchInput.className || "").substring(0, 60)}"`);
+        clickElement(searchInput);
+        return searchInput;
+      }
+
+      // Look for combobox wrapper and find input inside it
+      const combobox = parent.querySelector('[role="combobox"]');
+      if (combobox) {
+        const innerInput = combobox.querySelector("input");
+        if (innerInput) {
+          log(`Found input inside combobox: type="${innerInput.type || ""}"`);
+          clickElement(innerInput);
+          return innerInput;
+        }
+        log("Clicking combobox wrapper directly");
+        clickElement(combobox);
+        return combobox;
+      }
+
+      // Last resort: click the mantine input wrapper
+      const inputWrapper = parent.querySelector('[class*="mantine-Input-input"]');
+      if (inputWrapper) {
+        log("Clicking mantine input wrapper");
+        clickElement(inputWrapper);
+        return inputWrapper;
+      }
     }
 
     log(`Could not find filter dropdown for "${labelText}"`);
