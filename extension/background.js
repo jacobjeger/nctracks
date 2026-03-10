@@ -620,17 +620,13 @@ async function processNextPatient() {
           addLog(`  Attempt ${attempt} failed: ${err.message}. Retrying in ${RETRY_DELAY_MS / 1000}s...`);
           await delay(RETRY_DELAY_MS);
 
-          // Re-verify tab is alive before retry
-          const alive = await isTabAlive(state.tabId);
-          if (!alive) {
-            addLog("  Tab was closed during retry. Attempting recovery...");
-            try {
-              await ensureTab();
-              await navigateToEligibility();
-            } catch (recoveryErr) {
-              addLog("  Recovery failed: " + recoveryErr.message);
-              break;
-            }
+          // Navigate back to eligibility form before retrying
+          try {
+            await ensureTab();
+            await navigateToEligibility();
+          } catch (recoveryErr) {
+            addLog("  Recovery failed: " + recoveryErr.message);
+            break;
           }
         } else {
           addLog(`  All ${MAX_RETRIES} attempts failed for ${patientLabel}: ${lastError}`);
@@ -654,6 +650,12 @@ async function processNextPatient() {
     state.currentIndex++;
     saveState();
     sendProgress();
+
+    // Navigate back to eligibility form for the next patient
+    // (Check Eligibility loads a results page, so we must return to the form)
+    if (state.currentIndex < state.totalPatients && !state.stopRequested) {
+      await navigateToEligibility();
+    }
 
     // Delay between patients
     await delay(INTER_PATIENT_DELAY_MS);
