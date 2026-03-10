@@ -556,16 +556,26 @@ async function startFromEMR() {
       addLog("Already logged into EMR");
     }
 
-    // ── Navigate to Reports Page ──
+    // ── Navigate to Reports Page via Sidebar ──
     addLog("=== Phase: EMR Scrape ===");
     state.status = "emr_scraping";
     saveState();
     broadcastToPopup({ type: "emrProgress", phase: "navigating", patientsFound: 0 });
 
-    addLog(`Navigating to Client Reports: ${PASSAGEHEALTH_REPORTS_URL}`);
-    await chrome.tabs.update(state.tabId, { url: PASSAGEHEALTH_REPORTS_URL });
-    await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
-    await delay(EMR_PAGE_LOAD_DELAY_MS);
+    addLog("Navigating to Client Reports via sidebar navigation...");
+    const navResult = await sendToTab(state.tabId, { action: "emrNavigateToReports" });
+    addLog(`Sidebar navigation result: status=${navResult.status}, url=${navResult.url || "?"}, pageType=${navResult.pageType || "?"}`);
+
+    if (navResult.status === "ERROR") {
+      // Fallback: try direct URL navigation as last resort
+      addLog(`Sidebar navigation failed: ${navResult.notes} — falling back to direct URL...`);
+      await chrome.tabs.update(state.tabId, { url: PASSAGEHEALTH_REPORTS_URL });
+      await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+      await delay(EMR_PAGE_LOAD_DELAY_MS);
+    } else if (navResult.status === "PARTIAL") {
+      addLog(`Sidebar navigation partial — waiting extra time for page to settle...`);
+      await delay(EMR_PAGE_LOAD_DELAY_MS);
+    }
 
     // Verify we're on the reports page
     try {
@@ -573,6 +583,10 @@ async function startFromEMR() {
       addLog(`Reports page — type: ${pageCheck.pageType}, URL: ${pageCheck.url}`);
     } catch (err) {
       addLog(`Could not verify reports page: ${err.message}`);
+    }
+
+    if (pageCheck.pageType !== "reports") {
+      addLog(`Warning: May not be on reports page (type=${pageCheck.pageType}). Attempting to continue anyway...`);
     }
 
     // ── Apply Filters ──

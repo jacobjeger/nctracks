@@ -124,6 +124,7 @@
     const text = (document.body.innerText || "").toUpperCase();
 
     if (url.includes("/dashboard/reporting/clients")) return "reports";
+    if (url.includes("/dashboard/reporting")) return "reporting";
     if (url.includes("/dashboard")) return "dashboard";
 
     // Login page detection — look for login form indicators
@@ -632,6 +633,202 @@
   });
   urlObserver.observe(document.body, { childList: true, subtree: true });
 
+  // ─── Sidebar Navigation ───
+
+  async function navigateToReports() {
+    log("Navigating to Client Reports via sidebar...");
+    logPageState();
+
+    // The Passage Health sidebar is icon-only. We need to find and click the
+    // Reporting/folder icon, then click "Clients" in the submenu.
+    // Strategy: look for sidebar nav links/buttons by multiple methods.
+
+    const sidebar = document.querySelector(
+      'nav, aside, [class*="sidebar"], [class*="Sidebar"], [class*="side-bar"], [class*="nav-bar"], [role="navigation"]'
+    );
+    if (sidebar) {
+      log(`Found sidebar container: tag=${sidebar.tagName} class="${sidebar.className}"`);
+    } else {
+      log("No dedicated sidebar container found — searching full page");
+    }
+
+    const searchRoot = sidebar || document.body;
+
+    // Collect all clickable items in the sidebar for diagnostics
+    const allLinks = searchRoot.querySelectorAll("a, button, [role='button'], [role='menuitem'], [class*='nav-item'], [class*='menu-item']");
+    log(`Sidebar has ${allLinks.length} clickable elements`);
+    for (let i = 0; i < allLinks.length; i++) {
+      const el = allLinks[i];
+      const text = (el.textContent || "").trim().substring(0, 50);
+      const href = el.getAttribute("href") || "";
+      const ariaLabel = el.getAttribute("aria-label") || "";
+      const title = el.getAttribute("title") || "";
+      log(`  Sidebar item ${i}: tag=${el.tagName} text="${text}" href="${href}" aria="${ariaLabel}" title="${title}"`);
+    }
+
+    // Strategy 1: Find link/button containing "report" text (case-insensitive)
+    let reportLink = null;
+
+    // Check href first (most reliable for SPAs)
+    for (const el of allLinks) {
+      const href = (el.getAttribute("href") || "").toLowerCase();
+      if (href.includes("report")) {
+        reportLink = el;
+        log(`Found reporting link by href: "${href}"`);
+        break;
+      }
+    }
+
+    // Check text content
+    if (!reportLink) {
+      reportLink = findByText("a, button, [role='menuitem'], [role='button']", /report/i);
+      if (reportLink) log(`Found reporting link by text: "${(reportLink.textContent || "").trim().substring(0, 40)}"`);
+    }
+
+    // Check aria-label or title
+    if (!reportLink) {
+      for (const el of allLinks) {
+        const ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
+        const title = (el.getAttribute("title") || "").toLowerCase();
+        if (ariaLabel.includes("report") || title.includes("report")) {
+          reportLink = el;
+          log(`Found reporting link by aria/title: aria="${ariaLabel}" title="${title}"`);
+          break;
+        }
+      }
+    }
+
+    // Strategy 2: Look for an SVG icon that might represent reports/folder
+    // In icon-only sidebars, the clickable element may wrap an SVG with no text
+    if (!reportLink) {
+      log("No text-based reporting link found — trying icon-based approach...");
+      // Look for links with folder/chart/report-related SVG paths or classes
+      for (const el of allLinks) {
+        const svg = el.querySelector("svg");
+        if (svg) {
+          const svgClass = (svg.getAttribute("class") || "").toLowerCase();
+          const svgContent = (svg.innerHTML || "").toLowerCase();
+          if (svgClass.includes("report") || svgClass.includes("folder") || svgClass.includes("chart") ||
+              svgContent.includes("report") || svgContent.includes("folder")) {
+            reportLink = el;
+            log(`Found reporting link by SVG content/class`);
+            break;
+          }
+        }
+      }
+    }
+
+    // Strategy 3: If still not found, try clicking sidebar items one by one
+    // to see if a submenu with "Report" or "Client" appears
+    if (!reportLink) {
+      log("Trying sequential sidebar item clicks to find Reporting...");
+      for (let i = 0; i < allLinks.length; i++) {
+        const el = allLinks[i];
+        // Skip obvious non-report items (settings, help, logout, etc.)
+        const text = (el.textContent || "").trim().toLowerCase();
+        const href = (el.getAttribute("href") || "").toLowerCase();
+        if (text.includes("setting") || text.includes("help") || text.includes("logout") ||
+            text.includes("sign out") || href.includes("setting") || href.includes("logout")) {
+          continue;
+        }
+
+        clickElement(el);
+        await delay(1000);
+
+        // Check if "reporting" or "clients" submenu appeared
+        const submenuCheck = findByText("a, button, span, li, [role='menuitem']", /report|client/i);
+        if (submenuCheck) {
+          log(`Clicking sidebar item ${i} revealed submenu with: "${(submenuCheck.textContent || "").trim().substring(0, 40)}"`);
+          reportLink = submenuCheck;
+          break;
+        }
+
+        // Check if URL changed to something with "report"
+        if (window.location.href.toLowerCase().includes("report")) {
+          log(`Sidebar item ${i} navigated to reports URL: ${window.location.href}`);
+          reportLink = null; // Already navigated
+          break;
+        }
+      }
+    }
+
+    if (!reportLink && !window.location.href.toLowerCase().includes("report")) {
+      log("Could not find Reporting navigation item anywhere");
+      return { status: "ERROR", notes: "Could not find Reporting in sidebar navigation" };
+    }
+
+    // Click the Reporting link
+    if (reportLink) {
+      log(`Clicking Reporting link: "${(reportLink.textContent || "").trim().substring(0, 40)}"`);
+      clickElement(reportLink);
+      await delay(2000);
+      log(`After clicking Reporting — URL: ${window.location.href}`);
+    }
+
+    // Check if we need to click a "Clients" sub-item
+    // We might already be on /dashboard/reporting/clients, or need a second click
+    if (!window.location.href.toLowerCase().includes("reporting/clients")) {
+      log("Looking for 'Clients' sub-navigation item...");
+
+      // Wait a moment for submenu to render
+      await delay(1000);
+
+      let clientsLink = null;
+
+      // Find a link to clients
+      clientsLink = findByText("a, button, [role='menuitem'], [role='button'], li", /^clients?$/i);
+      if (!clientsLink) {
+        // Broader search
+        clientsLink = findByText("a, button, [role='menuitem'], span", /client/i);
+      }
+
+      // Check href
+      if (!clientsLink) {
+        const links = document.querySelectorAll("a");
+        for (const link of links) {
+          const href = (link.getAttribute("href") || "").toLowerCase();
+          if (href.includes("reporting/clients") || href.includes("report") && href.includes("client")) {
+            clientsLink = link;
+            log(`Found clients link by href: "${href}"`);
+            break;
+          }
+        }
+      }
+
+      if (clientsLink) {
+        log(`Clicking Clients link: "${(clientsLink.textContent || "").trim().substring(0, 40)}"`);
+        clickElement(clientsLink);
+        await delay(2000);
+        log(`After clicking Clients — URL: ${window.location.href}`);
+      } else {
+        log("Could not find 'Clients' sub-item — may already be on the right page or need different navigation");
+        // Log all visible links for debugging
+        const visLinks = document.querySelectorAll("a");
+        for (let i = 0; i < Math.min(visLinks.length, 30); i++) {
+          const l = visLinks[i];
+          log(`  Link ${i}: text="${(l.textContent || "").trim().substring(0, 50)}" href="${l.getAttribute("href") || ""}"`);
+        }
+      }
+    }
+
+    // Wait for reports page to fully load
+    log("Waiting for reports page to render...");
+    await delay(2000);
+
+    // Check if we're on the reports page
+    const finalUrl = window.location.href;
+    const pageType = detectPageType();
+    logPageState();
+
+    if (pageType === "reports" || finalUrl.toLowerCase().includes("report")) {
+      log(`Successfully navigated to reports page: ${finalUrl}`);
+      return { status: "OK", url: finalUrl, pageType };
+    }
+
+    log(`Navigation may not have reached reports page. Current: ${finalUrl}, type: ${pageType}`);
+    return { status: "PARTIAL", url: finalUrl, pageType, notes: "May not be on the correct reports page" };
+  }
+
   // ─── Message Listener ───
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -652,6 +849,17 @@
       const result = performLogin(msg.email, msg.password);
       sendResponse(result);
       return true;
+    }
+
+    if (msg.action === "emrNavigateToReports") {
+      log("Received emrNavigateToReports command");
+      navigateToReports()
+        .then((result) => sendResponse(result))
+        .catch((err) => {
+          logError("emrNavigateToReports", err);
+          sendResponse({ status: "ERROR", notes: err.message });
+        });
+      return true; // async
     }
 
     if (msg.action === "emrApplyFilters") {
