@@ -250,10 +250,41 @@
           event: "usernameSubmitted",
           password: password,
         });
-        return;
+
+        // NCID is often an SPA — the page doesn't fully reload between
+        // username and password steps. Wait for the password field to
+        // appear, then continue filling it in the same execution.
+        try {
+          await waitFor(() => findElement(CFG.PASSWORD_SELECTORS), 15000, 500);
+          await new Promise((r) => setTimeout(r, 500));
+          // Fall through to password step below
+        } catch {
+          // Page might have done a full reload (content script will re-inject),
+          // or it could be an MFA page. Check before giving up.
+          if (isMfaPage()) {
+            chrome.runtime.sendMessage({ event: "mfaRequired" });
+            try {
+              await waitFor(() => {
+                const url = window.location.href.toLowerCase();
+                return !url.includes("myncid.nc.gov") && !url.includes("ncid.nc.gov");
+              }, CFG.MFA_TIMEOUT_MS, 2000);
+              chrome.runtime.sendMessage({ event: "loginComplete" });
+            } catch {
+              // MFA timeout handled by background alarm
+            }
+            return;
+          }
+          if (isErrorPage()) {
+            reportError(getLoginErrorMessage());
+            return;
+          }
+          // If no password field and no MFA, the page may have reloaded —
+          // the re-injected content script will handle it.
+          return;
+        }
       }
 
-      // Password step
+      // Password step (reached directly or after username step above)
       if (isPasswordStep()) {
         const passwordField = findElement(CFG.PASSWORD_SELECTORS);
         if (!passwordField) {
@@ -292,6 +323,40 @@
         if (isErrorPage()) {
           const errorMsg = getLoginErrorMessage();
           reportError(errorMsg);
+          return;
+        }
+
+        // Check if we're still on NCID (might be MFA)
+        if (isMfaPage()) {
+          chrome.runtime.sendMessage({ event: "mfaRequired" });
+          try {
+            await waitFor(() => {
+              const url = window.location.href.toLowerCase();
+              return !url.includes("myncid.nc.gov") && !url.includes("ncid.nc.gov");
+            }, CFG.MFA_TIMEOUT_MS, 2000);
+            chrome.runtime.sendMessage({ event: "loginComplete" });
+          } catch {
+            // MFA timeout handled by background alarm
+          }
+          return;
+        }
+
+        // Check if login succeeded (redirected away from NCID)
+        try {
+          await waitFor(() => {
+            const url = window.location.href.toLowerCase();
+            return !url.includes("myncid.nc.gov") && !url.includes("ncid.nc.gov");
+          }, 15000, 1000);
+          chrome.runtime.sendMessage({ event: "loginComplete" });
+        } catch {
+          // Still on NCID — check for errors
+          if (isErrorPage()) {
+            reportError(getLoginErrorMessage());
+          } else if (isMfaPage()) {
+            chrome.runtime.sendMessage({ event: "mfaRequired" });
+          } else {
+            reportError("Login did not complete — still on NCID page after submitting credentials.");
+          }
         }
         return;
       }
