@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "NCTracks Eligibility Verifier",
+  "version": "1.0.0",
+  "description": "Batch verify Medicaid eligibility on NCTracks",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://*.nctracks.nc.gov/*",
+    "https://login.myncid.nc.gov/*",
+    "https://*.ncid.nc.gov/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://login.myncid.nc.gov/*", "https://*.ncid.nc.gov/*"],
+      "js": ["config.js", "content-ncid.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.nctracks.nc.gov/*"],
+      "js": ["config.js", "content-nctracks.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/xlsx.full.min.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

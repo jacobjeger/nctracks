@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NCTracks Verifier</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <h1>NCTracks Eligibility Verifier</h1>
+
+  <!-- Credentials Section -->
+  <section class="section">
+    <label for="username">NCID Username</label>
+    <input type="text" id="username" placeholder="Enter NCID username" autocomplete="username">
+
+    <label for="password">Password</label>
+    <input type="password" id="password" placeholder="Enter password" autocomplete="current-password">
+
+    <label class="checkbox-label">
+      <input type="checkbox" id="saveCreds" checked>
+      Save credentials
+    </label>
+  </section>
+
+  <!-- Patient File Section -->
+  <section class="section">
+    <div class="file-row">
+      <button id="browseBtn" class="btn btn-secondary">Browse...</button>
+      <span id="fileName" class="file-name">No file loaded</span>
+    </div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none">
+    <div class="file-row">
+      <button id="templateBtn" class="btn btn-link">Download Template</button>
+      <span id="patientCount" class="patient-count"></span>
+    </div>
+  </section>
+
+  <!-- Config Section -->
+  <section class="section config-section">
+    <label for="groupId">Group</label>
+    <input type="text" id="groupId" value="144862:1396570" placeholder="Group ID">
+
+    <label for="npiId">NPI / Atypical ID</label>
+    <input type="text" id="npiId" value="1396570701" placeholder="NPI">
+  </section>
+
+  <!-- Control Buttons -->
+  <section class="section controls">
+    <button id="runBtn" class="btn btn-primary" disabled>Run Verification</button>
+    <button id="stopBtn" class="btn btn-danger" disabled>Stop</button>
+    <button id="testBtn" class="btn btn-secondary">Test Login</button>
+  </section>
+
+  <!-- Progress Section -->
+  <section class="section" id="progressSection" style="display:none">
+    <div class="progress-bar-container">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+    <div id="progressText" class="progress-text"></div>
+  </section>
+
+  <!-- Status -->
+  <div id="statusMessage" class="status-message"></div>
+
+  <!-- Log Output -->
+  <section class="section">
+    <div id="logOutput" class="log-output"></div>
+  </section>
+
+  <!-- Download Results -->
+  <button id="downloadBtn" class="btn btn-primary" style="display:none; width:100%; margin-top:8px;">
+    Download Results (.xlsx)
+  </button>
+
+  <script src="lib/xlsx.full.min.js"></script>
+  <script src="config.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
