@@ -396,71 +396,92 @@
     log("Looking for Status filter dropdown...");
     let statusApplied = false;
 
-    statusApplied = await selectMantineDropdownOption("Status", "Active");
+    statusApplied = await selectMantineMultiSelectOption("Status", "Active");
     if (!statusApplied) {
       diagnostics.push("Status filter: could not select Active");
     }
-    await delay(1000);
+    await delay(500);
+
+    // Close any open dropdown before moving to the next filter
+    document.activeElement?.blur();
+    await delay(500);
 
     // ── Step 3: Funding Sources Filter ──
     log("Looking for Funding Sources filter dropdown...");
     let fundingApplied = false;
     const targetSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
 
-    // For a Mantine multi-select, click the search input to open dropdown,
-    // then click each option. Mantine MultiSelect keeps the dropdown open
-    // between selections, but we re-check and re-open if needed.
-    const fundingTrigger = await findAndClickFilterDropdown("Funding sources");
-    if (!fundingTrigger) {
-      diagnostics.push("Funding Sources filter dropdown not found");
-    } else {
-      await delay(1000);
-      logMantineDropdown();
-
-      let selectedCount = 0;
-      for (const sourceName of targetSources) {
-        // Check if dropdown is still open; re-open if not
-        let option = findMantineOption(sourceName);
-        if (!option) {
-          log(`Option "${sourceName}" not visible, re-opening dropdown...`);
-          clickElement(fundingTrigger);
+    if (targetSources.length > 0) {
+      // For Mantine MultiSelect: type each source name into the search input
+      // to filter the options, then click the matching option.
+      const fundingInput = await findAndClickFilterDropdown("Funding sources");
+      if (!fundingInput) {
+        diagnostics.push("Funding Sources filter dropdown not found");
+      } else {
+        let selectedCount = 0;
+        for (const sourceName of targetSources) {
+          // Type the source name to filter dropdown options
+          log(`Typing "${sourceName}" into Funding sources search...`);
+          setInputValue(fundingInput, sourceName);
           await delay(800);
-          option = findMantineOption(sourceName);
-        }
-        if (option) {
-          clickElement(option);
-          selectedCount++;
-          log(`Selected funding source: "${sourceName}"`);
-          await delay(500);
-        } else {
-          log(`Could not find funding source option: "${sourceName}"`);
-          diagnostics.push(`Funding source not found: "${sourceName}"`);
-        }
-      }
 
-      if (selectedCount > 0) {
-        fundingApplied = true;
-        log(`Selected ${selectedCount}/${targetSources.length} funding sources`);
-      }
+          // Log what appeared
+          logMantineDropdown();
 
-      // Close the dropdown by pressing Escape
-      document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await delay(500);
+          // Find and click the matching option
+          const option = findMantineOption(sourceName);
+          if (option) {
+            clickElement(option);
+            selectedCount++;
+            log(`Selected funding source: "${sourceName}"`);
+            await delay(500);
+          } else {
+            log(`Could not find funding source option: "${sourceName}"`);
+            diagnostics.push(`Funding source not found: "${sourceName}"`);
+          }
+
+          // Clear the search input for the next source
+          setInputValue(fundingInput, "");
+          await delay(300);
+        }
+
+        if (selectedCount > 0) {
+          fundingApplied = true;
+          log(`Selected ${selectedCount}/${targetSources.length} funding sources`);
+        }
+
+        // Close the dropdown
+        fundingInput.blur();
+        await delay(500);
+      }
     }
 
     // ── Step 4: Click "Done" button to apply filters ──
-    if (statusApplied || fundingApplied) {
-      log("Looking for Done / Apply button...");
-      let applyBtn = findByText("button", /^done$/i);
-      if (!applyBtn) applyBtn = findByText("button", /^(apply|filter|search|submit|go)(\s+filters?)?$/i);
+    log("Looking for Done / Apply button...");
+    let applyBtn = null;
 
-      if (applyBtn) {
-        log(`Found button: "${(applyBtn.textContent || "").trim()}" — clicking...`);
-        clickElement(applyBtn);
-        await delay(2000);
-      } else {
-        log("No Done/Apply button found — filters may auto-apply on selection");
+    // The Done button has nested <div><span>Done</span></div>, so textContent
+    // may have whitespace. Also look for primary-colored buttons.
+    for (const btn of document.querySelectorAll("button")) {
+      const text = (btn.textContent || "").trim();
+      if (/^done$/i.test(text)) {
+        applyBtn = btn;
+        break;
       }
+    }
+    if (!applyBtn) applyBtn = findByText("button", /^(apply|filter|search|submit|go)(\s+filters?)?$/i);
+    // Fallback: find primary-styled button (bg-primary-600)
+    if (!applyBtn) {
+      applyBtn = document.querySelector('button[class*="bg-primary"]');
+      if (applyBtn) log(`Found primary button as fallback: "${(applyBtn.textContent || "").trim()}"`);
+    }
+
+    if (applyBtn) {
+      log(`Found button: "${(applyBtn.textContent || "").trim()}" — clicking...`);
+      clickElement(applyBtn);
+      await delay(2000);
+    } else {
+      log("No Done/Apply button found — filters may auto-apply on selection");
     }
 
     // ── Step 5: Wait for table to update ──
@@ -558,34 +579,26 @@
     return null;
   }
 
-  // Select an option from a Mantine dropdown (for single-select like Status)
-  async function selectMantineDropdownOption(labelText, optionText) {
-    const trigger = await findAndClickFilterDropdown(labelText);
-    if (!trigger) return false;
+  // Select an option from a Mantine MultiSelect by typing into the search input
+  async function selectMantineMultiSelectOption(labelText, optionText) {
+    const input = await findAndClickFilterDropdown(labelText);
+    if (!input) return false;
 
+    await delay(500);
+
+    // Type the option text to filter the dropdown
+    log(`Typing "${optionText}" into "${labelText}" search input...`);
+    setInputValue(input, optionText);
     await delay(800);
+
     logMantineDropdown();
 
     const option = findMantineOption(optionText);
     if (option) {
       clickElement(option);
-      log(`Selected "${optionText}" in "${labelText}" dropdown`);
+      log(`Selected "${optionText}" in "${labelText}"`);
       await delay(500);
       return true;
-    }
-
-    // If option not found via text, try typing into the input (Mantine Combobox supports search)
-    const input = trigger.tagName === "INPUT" ? trigger : trigger.querySelector("input");
-    if (input) {
-      log(`Trying to type "${optionText}" into search input...`);
-      setInputValue(input, optionText);
-      await delay(500);
-      const searchOption = findMantineOption(optionText);
-      if (searchOption) {
-        clickElement(searchOption);
-        log(`Selected "${optionText}" via search`);
-        return true;
-      }
     }
 
     log(`Could not find option "${optionText}" in "${labelText}" dropdown`);
