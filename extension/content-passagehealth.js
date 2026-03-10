@@ -61,10 +61,15 @@
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  // Click an element, trying multiple approaches
+  // Click an element using the full pointer/mouse event sequence that React expects.
+  // React synthetic events rely on mousedown→mouseup→click; el.click() alone is ignored
+  // by Mantine Combobox options because React doesn't register it.
   function clickElement(el) {
     el.focus();
-    el.click();
+    el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
     el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   }
 
@@ -428,12 +433,12 @@
           // Log what appeared
           logMantineDropdown();
 
-          // Press Enter to select the first filtered option
+          // Click the matching option (full pointer/mouse event sequence)
           const option = findMantineOption(sourceName);
           if (option) {
-            fundingInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+            clickElement(option);
             selectedCount++;
-            log(`Selected funding source: "${sourceName}" (via Enter)`);
+            log(`Selected funding source: "${sourceName}"`);
             await delay(500);
           } else {
             log(`Could not find funding source option: "${sourceName}"`);
@@ -594,11 +599,11 @@
 
     logMantineDropdown();
 
-    // Press Enter to select the first filtered option (Mantine responds to Enter)
+    // Click the matching option (clickElement now uses full pointer/mouse sequence)
     const option = findMantineOption(optionText);
     if (option) {
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
-      log(`Selected "${optionText}" in "${labelText}" (via Enter)`);
+      clickElement(option);
+      log(`Selected "${optionText}" in "${labelText}"`);
       await delay(500);
       return true;
     }
