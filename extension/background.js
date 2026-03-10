@@ -158,7 +158,7 @@ async function ensureTab() {
   }
 
   return new Promise((resolve, reject) => {
-    chrome.tabs.create({ url: "about:blank", active: false }, (tab) => {
+    chrome.tabs.create({ url: "about:blank", active: true }, (tab) => {
       if (chrome.runtime.lastError) {
         reject(new Error("Failed to create tab: " + chrome.runtime.lastError.message));
         return;
