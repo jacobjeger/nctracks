@@ -600,8 +600,18 @@ async function processNextPatient() {
           config: state.config,
         });
 
+        if (fillResult.status === "SESSION_EXPIRED") {
+          // Page is not the eligibility form — session likely expired
+          addLog("Session expired (not on eligibility form) — re-logging in...");
+          broadcastToPopup({ type: "sessionExpired" });
+          state.loginRetryCount = 0;
+          processingActive = false;
+          await startLogin();
+          return; // Login flow will resume processing
+        }
+
         if (fillResult.status === "ERROR") {
-          // Form fill itself failed (e.g. session expired, field not found)
+          // Form fill itself failed (e.g. field not found)
           state.results.push({
             medicaid_id: patient.medicaid_id,
             name: patientName,

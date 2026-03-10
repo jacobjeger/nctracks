@@ -128,7 +128,16 @@
 
   function isSessionExpired() {
     const text = (document.body.innerText || "").toUpperCase();
-    return CFG.SESSION_TIMEOUT_PHRASES.some((phrase) => text.includes(phrase));
+    if (CFG.SESSION_TIMEOUT_PHRASES.some((phrase) => text.includes(phrase))) return true;
+    // Detect portal landing page (logged out but no explicit session-expired message)
+    const url = window.location.href.toLowerCase();
+    if (url.includes("nctracks.nc.gov") && !url.includes("eligibility") && !url.includes("loginaction") && !url.includes("ncid.nc.gov")) {
+      // On an NCTracks page but not the eligibility form — check if it's the portal landing
+      if (text.includes("GETTING STARTED WITH NCTRACKS") || text.includes("PROVIDER USER GUIDES")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function hasCaptcha() {
@@ -858,6 +867,14 @@
       if (!checkBtn) {
         // Log all discovered buttons for debugging
         const btnInfo = elements.buttons.map((b) => `[${b.type}] val="${b.value}" text="${b.text.substring(0, 25)}"`).join("; ");
+        // If no form fields were found either, we're likely logged out / on the wrong page
+        const noFormFields = !elements.accountDropdown && !elements.groupDropdown && !elements.npiDropdown && !elements.dosFrom;
+        if (noFormFields) {
+          return {
+            status: "SESSION_EXPIRED",
+            notes: `Not on eligibility form — likely logged out. Buttons on page: ${btnInfo}`,
+          };
+        }
         return {
           status: "ERROR",
           notes: `Submit button not found. Buttons on page: ${btnInfo}. ${diagnostics.join("; ")}`,
