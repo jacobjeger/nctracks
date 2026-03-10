@@ -844,6 +844,8 @@
 
     if (currentResults.length > 0) {
       downloadBar.style.display = "block";
+      // Auto-download the Excel file
+      downloadResults();
     }
 
     const eligible = currentResults.filter((r) => r.status === "ELIGIBLE" || r.status === "ACTIVE").length;
