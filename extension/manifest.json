@@ -7,7 +7,8 @@
     "storage",
     "activeTab",
     "tabs",
-    "downloads"
+    "downloads",
+    "notifications"
   ],
   "host_permissions": [
     "https://*.nctracks.nc.gov/*",

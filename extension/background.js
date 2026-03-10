@@ -52,8 +52,39 @@ function broadcastToPopup(data) {
   });
 }
 
+/** Update the extension badge with progress. */
+function updateBadge() {
+  if (state.status === "processing" && state.totalPatients > 0) {
+    const text = `${state.currentIndex}/${state.totalPatients}`;
+    chrome.action.setBadgeText({ text });
+    chrome.action.setBadgeBackgroundColor({ color: "#2F5496" });
+  } else if (state.status === "done") {
+    chrome.action.setBadgeText({ text: "✓" });
+    chrome.action.setBadgeBackgroundColor({ color: "#28a745" });
+  } else if (state.status === "error") {
+    chrome.action.setBadgeText({ text: "!" });
+    chrome.action.setBadgeBackgroundColor({ color: "#dc3545" });
+  } else if (state.status === "mfa_waiting") {
+    chrome.action.setBadgeText({ text: "MFA" });
+    chrome.action.setBadgeBackgroundColor({ color: "#ffc107" });
+  } else {
+    chrome.action.setBadgeText({ text: "" });
+  }
+}
+
+/** Show a browser notification. */
+function showNotification(title, message) {
+  chrome.notifications.create({
+    type: "basic",
+    iconUrl: "icons/icon128.png",
+    title,
+    message,
+  });
+}
+
 /** Send progress update to popup. */
 function sendProgress() {
+  updateBadge();
   broadcastToPopup({
     type: "progress",
     currentIndex: state.currentIndex,
@@ -186,6 +217,7 @@ async function processNextPatient() {
     sendProgress();
     addLog("Verification stopped. Results ready for download.");
     broadcastToPopup({ type: "complete", results: state.results });
+    showNotification("Verification Stopped", `Processed ${state.results.length} patients. Results ready for download.`);
     return;
   }
 
@@ -195,6 +227,11 @@ async function processNextPatient() {
     sendProgress();
     addLog(`Verification complete! ${state.results.length} patients processed.`);
     broadcastToPopup({ type: "complete", results: state.results });
+    const eligible = state.results.filter(r => r.status === "ELIGIBLE").length;
+    showNotification(
+      "Verification Complete",
+      `${state.results.length} patients processed. ${eligible} eligible. Click to download results.`
+    );
     return;
   }
 
@@ -366,6 +403,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       stopRequested: false,
     };
 
+    updateBadge();
     addLog(`Starting verification for ${state.totalPatients} patients...`);
 
     // Get or create a tab
