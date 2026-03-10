@@ -110,8 +110,7 @@ const NCTRACKS_CONFIG = {
     'a[title*="Check Eligibility"]',
     'a[href*="checkEligibility"]',
     'input[type="submit"][value*="Eligib"]',
-    'input[type="submit"]',
-    'button[type="submit"]',
+    'input[type="button"][value*="Eligib"]',
   ],
   CLEAR_SELECTORS: [
     'input[value="Clear"]',

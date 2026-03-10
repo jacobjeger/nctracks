@@ -277,11 +277,29 @@
 
         // Validate columns
         const headers = Object.keys(rows[0]).map((h) => h.trim().toUpperCase().replace(/\s+/g, "_"));
-        const validationIssues = [];
 
-        const hasMedicaidId = headers.some((h) => h === "MEDICAID_ID" || h === "MEDICAIDID" || h === "MEDICAID ID");
-        if (!hasMedicaidId) {
-          validationIssues.push('Missing required column: "Medicaid ID"');
+        // Check for funding_sources column (contains embedded Medicaid IDs like "Plan Name - 954658053S")
+        const hasFundingSources = headers.some((h) => h === "FUNDING_SOURCES" || h === "FUNDINGSOURCES");
+        const hasMedicaidId = headers.some((h) => h === "MEDICAID_ID" || h === "MEDICAIDID" || h === "MEDICAID_ID");
+
+        if (!hasMedicaidId && !hasFundingSources) {
+          showAlert("error", 'Missing required column: needs "Medicaid ID" or "funding_sources" with embedded IDs.');
+          patients = [];
+          updateRunButton();
+          return;
+        }
+
+        // Helper: extract 9-digit+letter Medicaid IDs from a funding_sources string
+        // Format: "Plan Name - 954658053S" or "Plan1 - 123456789A|Plan2 - 987654321B"
+        function extractMedicaidIds(fundingStr) {
+          if (!fundingStr) return [];
+          const ids = new Set();
+          // Match 9+ digit sequences followed by an optional letter
+          const matches = fundingStr.match(/\b(\d{9,12}[A-Za-z])\b/g);
+          if (matches) {
+            for (const m of matches) ids.add(m);
+          }
+          return [...ids];
         }
 
         // Parse patients
@@ -295,30 +313,47 @@
             normalized[key.toLowerCase().replace(/\s+/g, "_")] = String(row[key]).trim();
           }
 
-          const medicaidId = normalized["medicaid_id"] || normalized["medicaidid"] || "";
-          if (!medicaidId) {
-            warnings.push(`Row ${i + 2}: Missing Medicaid ID — skipped`);
-            continue;
-          }
-
-          // Validate Medicaid ID format (9 digits + optional alpha suffix)
-          if (!/^\d{7,12}[A-Za-z]?$/.test(medicaidId)) {
-            warnings.push(`Row ${i + 2}: Medicaid ID "${medicaidId}" looks unusual (expected 9+ digits with optional letter suffix)`);
-          }
-
+          const name = normalized["name"] || "";
+          const nameParts = name.split(/\s+/);
+          const firstName = normalized["first_name"] || normalized["firstname"] || nameParts[0] || "";
+          const lastName = normalized["last_name"] || normalized["lastname"] || nameParts.slice(1).join(" ") || "";
           const dob = normalized["dob"] || normalized["date_of_birth"] || "";
 
-          patients.push({
-            medicaid_id: medicaidId,
-            first_name: normalized["first_name"] || normalized["firstname"] || "",
-            last_name: normalized["last_name"] || normalized["lastname"] || "",
-            dob: dob,
-          });
+          // Try to get Medicaid IDs from funding_sources first
+          const fundingSources = normalized["funding_sources"] || normalized["fundingsources"] || "";
+          const embeddedIds = extractMedicaidIds(fundingSources);
+
+          // Also check the medicaid_id column
+          const directId = normalized["medicaid_id"] || normalized["medicaidid"] || "";
+
+          if (embeddedIds.length > 0) {
+            // Use IDs extracted from funding_sources (may have multiple per patient)
+            for (const id of embeddedIds) {
+              patients.push({ medicaid_id: id, first_name: firstName, last_name: lastName, dob });
+            }
+            if (embeddedIds.length > 1) {
+              warnings.push(`Row ${i + 2}: Found ${embeddedIds.length} Medicaid IDs: ${embeddedIds.join(", ")}`);
+            }
+          } else if (directId && /^\d{7,12}[A-Za-z]?$/.test(directId)) {
+            // Use direct Medicaid ID column if it looks like a real Medicaid ID
+            patients.push({ medicaid_id: directId, first_name: firstName, last_name: lastName, dob });
+          } else if (directId) {
+            warnings.push(`Row ${i + 2}: Medicaid ID "${directId}" looks unusual — skipped (expected 9+ digits with optional letter)`);
+          } else {
+            warnings.push(`Row ${i + 2}: No Medicaid ID found — skipped`);
+          }
         }
 
-        if (validationIssues.length > 0) {
-          showAlert("error", validationIssues.join(". "));
-          patients = [];
+        // Deduplicate by medicaid_id
+        const seen = new Set();
+        patients = patients.filter((p) => {
+          if (seen.has(p.medicaid_id)) return false;
+          seen.add(p.medicaid_id);
+          return true;
+        });
+
+        if (patients.length === 0) {
+          showAlert("error", "No valid Medicaid IDs found in file. " + (warnings.length > 0 ? warnings[0] : ""));
           updateRunButton();
           return;
         }

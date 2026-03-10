@@ -627,24 +627,43 @@
       await delay(300);
 
       // Click Check Eligibility — specifically search for this button, NOT generic "Search" nav links
-      let checkBtn = findElement(CFG.CHECK_ELIGIBILITY_SELECTORS);
+      let checkBtn = null;
+
+      // Strategy 1: Config selectors (specific value-matching selectors only)
+      checkBtn = findElement(CFG.CHECK_ELIGIBILITY_SELECTORS);
+
+      // Strategy 2: Search discovered buttons by label pattern
       if (!checkBtn) checkBtn = findButtonByLabel(elements, ["check.*elig"]);
+
+      // Strategy 3: Direct DOM search for elements with "Check Eligibility" text
       if (!checkBtn) {
-        // Search specifically for buttons/links with "Check Eligibility" text
         checkBtn = findButtonWithText(
           ["input[type='submit']", "input[type='button']", "button", "a"],
           ["Check Eligibility"]
         );
       }
+
+      // Strategy 4: Broader text matching on discovered buttons
+      if (!checkBtn) checkBtn = findButtonByLabel(elements, ["eligib"]);
+
+      // Strategy 5: Last resort — scan ALL inputs for value containing "Eligibility"
       if (!checkBtn) {
-        // Broader fallback — but NOT "Search" which is a nav element
-        checkBtn = findButtonByLabel(elements, ["eligib", "verify"]);
+        const allInputs = document.querySelectorAll("input");
+        for (const inp of allInputs) {
+          if (inp.value && /check\s*elig/i.test(inp.value)) {
+            checkBtn = inp;
+            diagnostics.push(`Found button via full input scan: value="${inp.value}"`);
+            break;
+          }
+        }
       }
 
       if (!checkBtn) {
+        // Log all discovered buttons for debugging
+        const btnInfo = elements.buttons.map((b) => `[${b.type}] val="${b.value}" text="${b.text.substring(0, 25)}"`).join("; ");
         return {
           status: "ERROR",
-          notes: `Submit button not found. ${diagnostics.join("; ")}`,
+          notes: `Submit button not found. Buttons on page: ${btnInfo}. ${diagnostics.join("; ")}`,
         };
       }
 
