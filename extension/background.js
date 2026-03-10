@@ -154,17 +154,28 @@ async function ensureTab() {
   if (state.tabId) {
     const alive = await isTabAlive(state.tabId);
     if (alive) return state.tabId;
-    addLog("Previous tab was closed. Opening a new tab...");
+    addLog("Previous tab was closed. Opening a new one...");
   }
 
   return new Promise((resolve, reject) => {
-    chrome.tabs.create({ url: "about:blank", active: true }, (tab) => {
+    // Open in a new window so it doesn't get lost behind the popup
+    chrome.windows.create({ url: "about:blank", focused: true, type: "normal" }, (win) => {
       if (chrome.runtime.lastError) {
-        reject(new Error("Failed to create tab: " + chrome.runtime.lastError.message));
+        // Fallback to a tab if window creation fails
+        chrome.tabs.create({ url: "about:blank", active: true }, (tab) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error("Failed to create tab: " + chrome.runtime.lastError.message));
+            return;
+          }
+          state.tabId = tab.id;
+          addLog(`Opened new tab (id: ${tab.id})`);
+          resolve(tab.id);
+        });
         return;
       }
+      const tab = win.tabs[0];
       state.tabId = tab.id;
-      addLog(`Opened new tab (id: ${tab.id})`);
+      addLog(`Opened new window (tab id: ${tab.id})`);
       resolve(tab.id);
     });
   });
@@ -411,15 +422,20 @@ async function startLogin() {
       return;
     }
 
-    addLog("Filling login credentials...");
+    addLog("Waiting for content script to be ready...");
     state.pendingPassword = state.credentials.password;
 
+    // Give content script extra time to initialize after page load
+    await delay(3000);
+
+    // Try sending credentials with generous retries — content script
+    // may need several seconds to become responsive on slow pages
     try {
       await sendToTab(state.tabId, {
         action: "fillLogin",
         username: state.credentials.username,
         password: state.credentials.password,
-      });
+      }, 6); // more retries for initial login
       addLog("Login credentials sent to page.");
     } catch (err) {
       addLog("Error communicating with login page: " + err.message);
@@ -661,17 +677,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // ── From NCID content script ──
 
   if (msg.event === "ncidPageReady") {
-    addLog("NCID login page detected.");
+    addLog(`NCID page ready: ${msg.pageType} (${msg.url || "unknown URL"})`);
     if (state.status === "logging_in" && state.credentials.username) {
-      setTimeout(() => {
-        sendToTab(state.tabId, {
-          action: "fillLogin",
-          username: state.credentials.username,
-          password: state.credentials.password,
-        }).catch((err) => {
-          addLog("Failed to send credentials: " + err.message);
-        });
-      }, 1500);
+      // Content script is ready — send credentials immediately (with a small delay for page settle)
+      setTimeout(async () => {
+        try {
+          await sendToTab(state.tabId, {
+            action: "fillLogin",
+            username: state.credentials.username,
+            password: state.credentials.password,
+          });
+          addLog("Login credentials sent via page-ready handler.");
+        } catch (err) {
+          addLog("Failed to send credentials via page-ready: " + err.message);
+        }
+      }, 500);
+    }
+    // Also handle password step after page reload (NCID sometimes does full reload)
+    if (msg.pageType === "password" && state.pendingPassword) {
+      setTimeout(async () => {
+        try {
+          await sendToTab(state.tabId, {
+            action: "fillLogin",
+            username: state.credentials.username,
+            password: state.pendingPassword,
+          });
+          addLog("Password sent after page reload.");
+        } catch (err) {
+          addLog("Failed to send password after reload: " + err.message);
+        }
+      }, 500);
     }
   }
 

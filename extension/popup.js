@@ -657,12 +657,15 @@
       const pct = Math.round((currentIndex / totalPatients) * 100);
       progressBar.style.width = pct + "%";
       progressCount.textContent = `${currentIndex} / ${totalPatients}`;
+    } else {
+      progressBar.style.width = "0%";
+      progressCount.textContent = "";
+    }
 
-      if (status === "processing") {
-        progressBar.classList.add("animated");
-      } else {
-        progressBar.classList.remove("animated");
-      }
+    if (status === "processing") {
+      progressBar.classList.add("animated");
+    } else {
+      progressBar.classList.remove("animated");
     }
 
     // Update phase label

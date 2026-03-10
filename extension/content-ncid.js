@@ -185,8 +185,8 @@
 
   async function handleLogin(username, password) {
     try {
-      // Let the page settle
-      await new Promise((r) => setTimeout(r, 1500));
+      // Let the page settle briefly
+      await new Promise((r) => setTimeout(r, 800));
 
       // Check for error messages first (from a previous failed attempt)
       if (isErrorPage()) {
