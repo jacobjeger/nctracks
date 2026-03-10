@@ -276,14 +276,19 @@
       });
     });
 
-    // Catalog buttons/submit inputs
-    document.querySelectorAll("input[type='submit'], input[type='button'], button").forEach((btn) => {
+    // Catalog buttons/submit inputs AND clickable links (NCTracks uses <a> tags as buttons)
+    document.querySelectorAll("input[type='submit'], input[type='button'], button, a[href]").forEach((btn) => {
+      const text = (btn.textContent || "").trim();
+      const value = btn.value || "";
+      // Skip nav links and tiny links — only include ones that look like action buttons
+      if (btn.tagName === "A" && !text && !value) return;
+      if (btn.tagName === "A" && text.length > 40) return; // Skip long nav text
       elements.buttons.push({
         el: btn,
         id: btn.id || "",
-        value: btn.value || "",
-        text: (btn.textContent || "").trim(),
-        type: btn.type || "",
+        value: value,
+        text: text,
+        type: btn.type || btn.tagName,
       });
     });
 
@@ -477,12 +482,12 @@
       // Fill Date of Service From (today) — try config selectors, then discover
       const today = new Date();
       let dosFromField = findElement(CFG.DOS_FROM_SELECTORS);
-      if (!dosFromField) dosFromField = findByLabel(elements, ["date.*from", "from.*date", "service.*from", "dos.*from", "begin.*date", "start.*date"], "input");
+      if (!dosFromField) dosFromField = findByLabel(elements, ["date.*service.*from", "service.*from", "date.*from", "from.*date", "dos.*from", "start.*date"], "input");
       if (!dosFromField) {
-        // Try finding date inputs by type or pattern
+        // Try finding by placeholder pattern (mm/dd/yyyy inputs)
         const dateInputs = elements.inputs.filter((i) =>
-          i.type === "date" || i.label.toLowerCase().includes("date") ||
-          i.name.toLowerCase().includes("date") || i.placeholder.includes("/")
+          i.el.placeholder === "mm/dd/yyyy" || i.id.toLowerCase().includes("dateofservice") ||
+          i.name.toLowerCase().includes("dateofservice") || i.id.toLowerCase().includes("servicestart")
         );
         if (dateInputs.length >= 1) {
           dosFromField = dateInputs[0].el;
@@ -491,28 +496,54 @@
       }
       if (dosFromField) {
         fillInput(dosFromField, formatDate(today));
+        diagnostics.push(`DOS From filled: id="${dosFromField.id}"`);
       } else {
         diagnostics.push("DOS From field not found");
       }
       await delay(300);
 
-      // Fill Date of Service To
+      // Fill Date of Service To — the "To:" field is right after DOS From
       const dosToDate = new Date(today);
       dosToDate.setDate(dosToDate.getDate() + (config.dosRangeDays || CFG.DOS_RANGE_DAYS));
       let dosToField = findElement(CFG.DOS_TO_SELECTORS);
-      if (!dosToField) dosToField = findByLabel(elements, ["date.*to", "to.*date", "service.*to", "dos.*to", "end.*date", "thru.*date", "through.*date"], "input");
-      if (!dosToField) {
-        const dateInputs = elements.inputs.filter((i) =>
-          i.type === "date" || i.label.toLowerCase().includes("date") ||
-          i.name.toLowerCase().includes("date") || i.placeholder.includes("/")
-        );
-        if (dateInputs.length >= 2) {
-          dosToField = dateInputs[1].el;
-          diagnostics.push(`Using discovered date input as DOS To: id="${dateInputs[1].id}" label="${dateInputs[1].label}"`);
+      if (!dosToField) dosToField = findByLabel(elements, ["^to:?$", "service.*to", "date.*to", "dos.*to", "end.*date", "thru", "through"], "input");
+      if (!dosToField && dosFromField) {
+        // The "To:" input is the next sibling input after DOS From in the same row
+        // Walk from dosFromField to find the next text input
+        let nextEl = dosFromField.parentElement;
+        while (nextEl) {
+          nextEl = nextEl.nextElementSibling;
+          if (!nextEl) break;
+          const inp = nextEl.querySelector ? nextEl.querySelector("input[type='text'], input:not([type])") : null;
+          if (inp && inp !== dosFromField) {
+            dosToField = inp;
+            diagnostics.push(`Found DOS To as next input after DOS From: id="${inp.id}"`);
+            break;
+          }
+          // Also check if the element itself is an input
+          if (nextEl.tagName === "INPUT" && nextEl !== dosFromField) {
+            dosToField = nextEl;
+            diagnostics.push(`Found DOS To as next sibling input: id="${nextEl.id}"`);
+            break;
+          }
+        }
+        // Also try: all mm/dd/yyyy inputs, pick the one that ISN'T dosFromField
+        if (!dosToField) {
+          const mmddInputs = elements.inputs.filter((i) =>
+            i.el !== dosFromField && (
+              i.el.placeholder === "mm/dd/yyyy" || i.id.toLowerCase().includes("dateofservice") ||
+              i.name.toLowerCase().includes("dateofservice") || i.id.toLowerCase().includes("serviceend")
+            )
+          );
+          if (mmddInputs.length >= 1) {
+            dosToField = mmddInputs[0].el;
+            diagnostics.push(`Using second date input as DOS To: id="${mmddInputs[0].id}" label="${mmddInputs[0].label}"`);
+          }
         }
       }
       if (dosToField) {
         fillInput(dosToField, formatDate(dosToDate));
+        diagnostics.push(`DOS To filled: id="${dosToField.id}"`);
       } else {
         diagnostics.push("DOS To field not found");
       }

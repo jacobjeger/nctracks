@@ -416,6 +416,7 @@ async function startLogin() {
     // Already logged in?
     if (url.includes("nctracks.nc.gov") && !url.includes("loginaction")) {
       addLog("Already logged in.");
+      state.status = "processing"; // Prevent ncTracksPageReady from re-triggering
       await navigateToEligibility();
       processNextPatient();
       return;
@@ -740,7 +741,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.event === "loginComplete") {
+    if (state.status !== "logging_in" && state.status !== "mfa_waiting") return true;
     addLog("Login complete!");
+    state.status = "processing"; // Set immediately to prevent re-entry
     state.loginRetryCount = 0;
     stopKeepalive();
     navigateToEligibility().then(() => {
@@ -772,9 +775,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // ── From NCTracks content script ──
 
   if (msg.event === "ncTracksPageReady") {
+    // Only handle this ONCE during login — set status immediately to prevent re-entry
     if (state.status === "logging_in" || state.status === "mfa_waiting") {
       const url = msg.url || "";
       if (url.includes("nctracks.nc.gov") && !url.includes("loginAction")) {
+        state.status = "processing"; // Set immediately to prevent loop
         addLog("Login successful — redirected to NCTracks portal.");
         state.loginRetryCount = 0;
         stopKeepalive();

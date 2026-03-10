@@ -47,11 +47,14 @@ const NCTRACKS_CONFIG = {
     'button[type="submit"]',
   ],
 
-  // Eligibility form selectors
+  // Eligibility form selectors — based on actual NCTracks "Verify Recipient" page
+  // The page uses table-based layout with labels in preceding <td> cells.
+  // Element IDs may be dynamic (JSF-style), so we use multiple fallback strategies.
   GROUP_SELECTORS: [
     'select[name*="group" i]',
     'select[id*="group" i]',
     'select[name*="Group"]',
+    'select[id*="Group"]',
   ],
   NPI_SELECTORS: [
     'select[name*="npi" i]',
@@ -59,34 +62,52 @@ const NCTRACKS_CONFIG = {
     'select[name*="Npi"]',
     'select[name*="atypical" i]',
     'select[id*="atypical" i]',
+    'select[name*="Atypical"]',
+    'select[id*="Atypical"]',
   ],
   RECIPIENT_ID_SELECTORS: [
     'input[name*="recipientId" i]',
     'input[id*="recipientId" i]',
     'input[name*="RecipientId"]',
     'input[id*="RecipientId"]',
+    'input[name*="Recipient" i]',
+    'input[id*="Recipient" i]',
   ],
   DOS_FROM_SELECTORS: [
+    'input[id="DateOfServiceStart"]',
+    'input[id*="DateOfServiceStart"]',
+    'input[id*="dateOfServiceStart" i]',
+    'input[name*="DateOfServiceStart"]',
     'input[name*="dateOfServiceFrom" i]',
     'input[id*="dateOfServiceFrom" i]',
     'input[name*="dosFrom" i]',
     'input[name*="serviceFrom" i]',
+    'input[name*="ServiceStart" i]',
   ],
   DOS_TO_SELECTORS: [
+    'input[id="DateOfServiceEnd"]',
+    'input[id*="DateOfServiceEnd"]',
+    'input[id*="dateOfServiceEnd" i]',
+    'input[name*="DateOfServiceEnd"]',
     'input[name*="dateOfServiceTo" i]',
     'input[id*="dateOfServiceTo" i]',
     'input[name*="dosTo" i]',
     'input[name*="serviceTo" i]',
+    'input[name*="ServiceEnd" i]',
   ],
   CHECK_ELIGIBILITY_SELECTORS: [
     'input[value="Check Eligibility"]',
     'input[value*="Check Elig"]',
+    'a[title*="Check Eligibility"]',
+    'a[href*="checkEligibility"]',
     'input[type="submit"][value*="Eligib"]',
     'input[type="submit"]',
     'button[type="submit"]',
   ],
   CLEAR_SELECTORS: [
     'input[value="Clear"]',
+    'a[title="Clear"]',
+    'a[href*="clear"]',
   ],
 
   // Result scraping
