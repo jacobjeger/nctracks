@@ -305,6 +305,20 @@
     }
   }
 
+  // ─── Keepalive Port ───
+
+  function connectKeepalive() {
+    try {
+      const port = chrome.runtime.connect({ name: "keepalive" });
+      port.onDisconnect.addListener(() => {
+        setTimeout(connectKeepalive, 1000);
+      });
+    } catch {
+      // Extension context may be invalidated
+    }
+  }
+  connectKeepalive();
+
   // ─── Page Ready Notification ───
 
   try {

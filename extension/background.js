@@ -129,6 +129,7 @@ function broadcastError(errorType, message) {
     errorType: errorType,
     message: message,
   });
+  showNotification("Verification Error", message);
 }
 
 // ─── Tab Management ───
@@ -185,6 +186,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
         state.lastErrorType = "tab_error";
         saveState();
         sendProgress();
+        showNotification("MFA Tab Closed", "The MFA tab was closed. Please restart verification.");
       }
       // For processing/logging_in, the loop will recover automatically
     }
@@ -286,10 +288,18 @@ function waitForTabUrl(tabId, urlTest, timeoutMs = 60000) {
   });
 }
 
-// ─── Keepalive (for MFA wait) ───
+// ─── Keepalive ───
+// Chrome MV3 service workers get terminated after ~30s of inactivity.
+// We use multiple strategies to stay alive during processing:
+// 1. chrome.alarms (min 30s period) as a safety net
+// 2. Port-based keepalive from content scripts (instant reconnect)
+// 3. Self-pinging during long delays
+
+let keepalivePorts = new Set();
 
 function startKeepalive() {
-  chrome.alarms.create("keepalive", { periodInMinutes: KEEPALIVE_INTERVAL_MINUTES });
+  // Alarm-based keepalive (safety net — minimum 30s in MV3)
+  chrome.alarms.create("keepalive", { periodInMinutes: 0.5 });
 }
 
 function stopKeepalive() {
@@ -297,9 +307,20 @@ function stopKeepalive() {
   chrome.alarms.clear("mfa-timeout");
 }
 
+// Port-based keepalive: content scripts connect and hold a port open,
+// which prevents Chrome from killing the service worker.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === "keepalive") {
+    keepalivePorts.add(port);
+    port.onDisconnect.addListener(() => {
+      keepalivePorts.delete(port);
+    });
+  }
+});
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "keepalive") {
-    // Just accessing state keeps the SW alive
+    // Accessing state keeps the SW alive
     if (state.status === "idle" || state.status === "done" || state.status === "error") {
       stopKeepalive();
     }
@@ -315,8 +336,23 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // ─── Utility ───
 
+// Delay that keeps the service worker alive by chunking into short intervals
 function delay(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => {
+    if (ms <= 5000) {
+      setTimeout(resolve, ms);
+    } else {
+      // For longer delays, chunk into 4s intervals to prevent SW termination
+      let remaining = ms;
+      const tick = () => {
+        if (remaining <= 0) return resolve();
+        const wait = Math.min(remaining, 4000);
+        remaining -= wait;
+        setTimeout(tick, wait);
+      };
+      tick();
+    }
+  });
 }
 
 // ─── Login Flow ───
@@ -504,6 +540,7 @@ async function processNextPatient() {
         if (sessionStatus.captcha) {
           addLog("CAPTCHA detected — please solve it in the browser tab.");
           broadcastToPopup({ type: "captchaRequired" });
+          showNotification("CAPTCHA Required", "Please solve the CAPTCHA in the NCTracks browser tab to continue.");
           try {
             await sendToTab(state.tabId, { action: "waitForCaptcha" });
             addLog("CAPTCHA resolved.");
@@ -633,6 +670,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendProgress();
     addLog("MFA required — please complete verification in the browser tab.");
     broadcastToPopup({ type: "mfaRequired" });
+    showNotification("MFA Required", "Please complete multi-factor authentication in the browser tab.");
 
     // Set up keepalive and timeout
     startKeepalive();

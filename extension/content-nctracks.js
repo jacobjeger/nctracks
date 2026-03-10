@@ -489,6 +489,23 @@
     }
   });
 
+  // ─── Keepalive Port ───
+  // Hold a port open to the background service worker to prevent Chrome
+  // from terminating it while this tab is active.
+
+  function connectKeepalive() {
+    try {
+      const port = chrome.runtime.connect({ name: "keepalive" });
+      port.onDisconnect.addListener(() => {
+        // Service worker restarted — reconnect after a short delay
+        setTimeout(connectKeepalive, 1000);
+      });
+    } catch {
+      // Extension context may be invalidated
+    }
+  }
+  connectKeepalive();
+
   // ─── Page Ready Notification ───
 
   try {
