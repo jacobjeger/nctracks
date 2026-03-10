@@ -507,9 +507,10 @@ async function processNextPatient() {
           medicaid_id: p.medicaid_id,
           name: `${p.first_name || ""} ${p.last_name || ""}`.trim(),
           status: "SKIPPED",
-          coverage_start: "",
-          coverage_end: "",
-          plan_name: "",
+          managing_entity: "",
+          managing_entity_next: "",
+          current_period: "",
+          next_period: "",
           checked_at: new Date().toISOString(),
           notes: "Stopped by user",
         });
@@ -616,9 +617,10 @@ async function processNextPatient() {
             medicaid_id: patient.medicaid_id,
             name: patientName,
             status: fillResult.status,
-            coverage_start: "",
-            coverage_end: "",
-            plan_name: "",
+            managing_entity: "",
+            managing_entity_next: "",
+            current_period: "",
+            next_period: "",
             checked_at: new Date().toISOString(),
             notes: fillResult.notes || "",
           });
@@ -648,38 +650,61 @@ async function processNextPatient() {
           }
         }
 
-        // Append fill diagnostics to result notes
-        if (fillResult.diagnostics) {
-          result.notes = result.notes
-            ? result.notes + " | " + fillResult.diagnostics
-            : fillResult.diagnostics;
+        // Current month entity
+        const currentEntity = result.managing_entity || "";
+        const currentPeriod = result.coverage_dates || "";
+
+        addLog(`  Current month: ${currentEntity || "(none)"}${currentPeriod ? " | " + currentPeriod : ""}`);
+
+        // Step 4: Select next month in Period Selection and scrape that too
+        let nextEntity = "";
+        let nextPeriod = "";
+        try {
+          // Ask content script to change the Period Selection dropdown
+          const selectResult = await sendToTab(state.tabId, { action: "selectNextPeriod" });
+          if (selectResult.status === "CHANGING") {
+            nextPeriod = selectResult.nextPeriod || "";
+            addLog(`  Switching to next period: ${nextPeriod}`);
+
+            // The dropdown change triggers a page navigation — wait for it
+            await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+            await delay(3000); // Wait for content script to inject
+
+            // Scrape just the managing entity from the reloaded page
+            try {
+              const entityResult = await sendToTab(state.tabId, { action: "scrapeEntityOnly" });
+              if (entityResult.status === "OK") {
+                nextEntity = entityResult.managing_entity || "";
+                if (entityResult.coverage_dates) nextPeriod = entityResult.coverage_dates;
+                addLog(`  Next month: ${nextEntity || "(none)"}${nextPeriod ? " | " + nextPeriod : ""}`);
+              }
+            } catch (scrapeErr) {
+              addLog(`  Could not scrape next period entity: ${scrapeErr.message}`);
+            }
+          } else if (selectResult.status === "NO_DROPDOWN") {
+            addLog("  No Period Selection dropdown found on results page.");
+          } else if (selectResult.status === "NO_NEXT_PERIOD") {
+            addLog("  No next month available in Period Selection.");
+          } else {
+            addLog(`  Next period select: ${selectResult.status} — ${selectResult.error || ""}`);
+          }
+        } catch (nextErr) {
+          addLog(`  Could not scrape next period: ${nextErr.message}`);
         }
 
         state.results.push({
           medicaid_id: patient.medicaid_id,
           name: result.recipient_name || patientName,
           status: result.status || "UNKNOWN",
-          dob: result.dob || "",
-          gender: result.gender || "",
-          county: result.county || "",
-          benefit_plan: result.benefit_plan || "",
-          aid_category: result.aid_category || "",
-          coverage_dates: result.coverage_dates || "",
-          managing_entity: result.managing_entity || "",
-          managed_care_note: result.managed_care_note || "",
-          pcp_name: result.pcp_name || "",
-          pcp_phone: result.pcp_phone || "",
-          tailored_care_manager: result.tailored_care_manager || "",
-          tcm_phone: result.tcm_phone || "",
-          other_insurance: result.other_insurance || "",
-          medicare_a: result.medicare_a || "",
-          medicare_b: result.medicare_b || "",
-          hospice: result.hospice || "",
+          managing_entity: currentEntity,
+          managing_entity_next: nextEntity,
+          current_period: currentPeriod,
+          next_period: nextPeriod,
           checked_at: new Date().toISOString(),
           notes: result.notes || "",
         });
 
-        addLog(`  Result: ${result.status} — ${result.recipient_name || ""}${result.benefit_plan ? " | Plan: " + result.benefit_plan : ""}${result.coverage_dates ? " | " + result.coverage_dates : ""}${result.managing_entity ? " | " + result.managing_entity : ""}`);
+        addLog(`  Result: ${result.status} — ${result.recipient_name || ""} | Entity: ${currentEntity} | Next: ${nextEntity}`);
         succeeded = true;
         break;
       } catch (err) {
@@ -707,9 +732,10 @@ async function processNextPatient() {
         medicaid_id: patient.medicaid_id,
         name: patientName,
         status: "ERROR",
-        coverage_start: "",
-        coverage_end: "",
-        plan_name: "",
+        managing_entity: "",
+        managing_entity_next: "",
+        current_period: "",
+        next_period: "",
         checked_at: new Date().toISOString(),
         notes: `Failed after ${MAX_RETRIES} attempts: ${lastError}`,
       });

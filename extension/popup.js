@@ -1081,22 +1081,18 @@
     try {
       const wb = XLSX.utils.book_new();
       const headers = [
-        "Medicaid ID", "Name", "Status", "DOB", "Gender", "County",
-        "Benefit Plan", "Category of Eligibility", "Dates of Enrollment",
-        "Managing Entity", "Managed Care", "PCP Name", "PCP Phone",
-        "Tailored Care Manager", "TCM Phone", "Other Insurance",
-        "Medicare Part A", "Medicare Part B", "Hospice",
+        "Medicaid ID", "Name", "Status",
+        "Managing Entity (Current)", "Current Period",
+        "Managing Entity (Next)", "Next Period",
         "Checked At", "Notes",
       ];
 
       const wsData = [headers];
       for (const r of currentResults) {
         wsData.push([
-          r.medicaid_id, r.name, r.status, r.dob || "", r.gender || "", r.county || "",
-          r.benefit_plan || "", r.aid_category || "", r.coverage_dates || "",
-          r.managing_entity || "", r.managed_care_note || "", r.pcp_name || "", r.pcp_phone || "",
-          r.tailored_care_manager || "", r.tcm_phone || "", r.other_insurance || "",
-          r.medicare_a || "", r.medicare_b || "", r.hospice || "",
+          r.medicaid_id, r.name, r.status,
+          r.managing_entity || "", r.current_period || r.coverage_dates || "",
+          r.managing_entity_next || "", r.next_period || "",
           r.checked_at, r.notes || "",
         ]);
       }
@@ -1132,24 +1128,12 @@
 
       ws["!cols"] = [
         { wch: 14 },  // Medicaid ID
-        { wch: 22 },  // Name
+        { wch: 25 },  // Name
         { wch: 16 },  // Status
-        { wch: 12 },  // DOB
-        { wch: 8 },   // Gender
-        { wch: 16 },  // County
-        { wch: 40 },  // Benefit Plan
-        { wch: 18 },  // Category of Eligibility
-        { wch: 26 },  // Dates of Enrollment
-        { wch: 30 },  // Managing Entity
-        { wch: 22 },  // Managed Care
-        { wch: 30 },  // PCP Name
-        { wch: 14 },  // PCP Phone
-        { wch: 30 },  // Tailored Care Manager
-        { wch: 14 },  // TCM Phone
-        { wch: 40 },  // Other Insurance
-        { wch: 8 },   // Medicare A
-        { wch: 8 },   // Medicare B
-        { wch: 8 },   // Hospice
+        { wch: 35 },  // Managing Entity (Current)
+        { wch: 28 },  // Current Period
+        { wch: 35 },  // Managing Entity (Next)
+        { wch: 28 },  // Next Period
         { wch: 22 },  // Checked At
         { wch: 50 },  // Notes
       ];

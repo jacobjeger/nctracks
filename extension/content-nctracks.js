@@ -966,6 +966,74 @@
       return true;
     }
 
+    if (msg.action === "selectNextPeriod") {
+      // Find the Period Selection dropdown and select the next month
+      // This may trigger a page navigation, so respond BEFORE changing
+      try {
+        const selects = document.querySelectorAll("select");
+        let periodSelect = null;
+        for (const sel of selects) {
+          const label = findLabelFor(sel);
+          if (/period/i.test(label) || /period/i.test(sel.id) || /period/i.test(sel.name)) {
+            periodSelect = sel;
+            break;
+          }
+        }
+        // Fallback: look for a select whose options contain date ranges
+        if (!periodSelect) {
+          for (const sel of selects) {
+            const opts = Array.from(sel.options);
+            if (opts.some((o) => /\d{2}\/\d{2}\/\d{4}/.test(o.text || o.value))) {
+              periodSelect = sel;
+              break;
+            }
+          }
+        }
+
+        if (!periodSelect) {
+          sendResponse({ status: "NO_DROPDOWN" });
+          return true;
+        }
+
+        const currentIdx = periodSelect.selectedIndex;
+        const options = Array.from(periodSelect.options);
+        const currentPeriod = options[currentIdx] ? (options[currentIdx].text || options[currentIdx].value) : "";
+
+        if (currentIdx + 1 >= options.length) {
+          sendResponse({ status: "NO_NEXT_PERIOD", currentPeriod });
+          return true;
+        }
+
+        const nextOption = options[currentIdx + 1];
+        const nextPeriodText = nextOption.text || nextOption.value;
+
+        // Respond BEFORE triggering the change (may cause page nav)
+        sendResponse({ status: "CHANGING", nextPeriod: nextPeriodText, currentPeriod });
+
+        // Change selection after a small delay to let the response send
+        setTimeout(() => {
+          periodSelect.selectedIndex = currentIdx + 1;
+          periodSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        }, 100);
+      } catch (err) {
+        sendResponse({ status: "ERROR", error: err.message });
+      }
+      return true;
+    }
+
+    if (msg.action === "scrapeEntityOnly") {
+      // Quick scrape of just the managing entity from the current page
+      try {
+        const plans = scrapeHealthPlanTable();
+        const entity = plans.length > 0 ? plans[0].managing_entity : "";
+        const dates = plans.length > 0 ? plans[0].dates : "";
+        sendResponse({ status: "OK", managing_entity: entity, coverage_dates: dates });
+      } catch (err) {
+        sendResponse({ status: "ERROR", managing_entity: "", error: err.message });
+      }
+      return true;
+    }
+
     if (msg.action === "checkSessionStatus") {
       try {
         const expired = isSessionExpired();
