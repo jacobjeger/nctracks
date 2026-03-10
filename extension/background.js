@@ -30,6 +30,9 @@ let state = {
   loginRetryCount: 0,
 };
 
+// Guard against concurrent processNextPatient calls
+let processingActive = false;
+
 // ─── State Persistence ───
 
 async function saveState() {
@@ -486,6 +489,13 @@ async function navigateToEligibility() {
 // ─── Batch Processing ───
 
 async function processNextPatient() {
+  // Prevent concurrent calls — multiple event handlers can trigger this
+  if (processingActive) {
+    addLog("(Skipping duplicate processNextPatient call)");
+    return;
+  }
+  processingActive = true;
+
   try {
     // Check stop request
     if (state.stopRequested) {
@@ -527,6 +537,7 @@ async function processNextPatient() {
         await ensureTab();
         await navigateToEligibility();
       } catch (err) {
+        processingActive = false;
         broadcastError("tab_error", "Lost browser tab and could not recover: " + err.message);
         return;
       }
@@ -561,6 +572,7 @@ async function processNextPatient() {
           addLog("Session expired — re-logging in...");
           broadcastToPopup({ type: "sessionExpired" });
           state.loginRetryCount = 0;
+          processingActive = false;
           await startLogin();
           return; // Login flow will resume processing
         }
@@ -644,8 +656,10 @@ async function processNextPatient() {
 
     // Delay between patients
     await delay(INTER_PATIENT_DELAY_MS);
+    processingActive = false; // Release lock before next iteration
     processNextPatient();
   } catch (err) {
+    processingActive = false;
     // Catch-all for unexpected errors in processing loop
     addLog(`Unexpected error in processing loop: ${err.message}`);
     broadcastError("unknown", `Processing failed unexpectedly: ${err.message}`);
@@ -653,6 +667,7 @@ async function processNextPatient() {
 }
 
 function finishBatch(logMessage) {
+  processingActive = false;
   state.status = "done";
   saveState();
   sendProgress();
@@ -810,6 +825,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return true;
     }
 
+    processingActive = false; // Reset processing lock for new run
     updateBadge();
     startKeepalive();
     addLog(`Starting verification for ${state.totalPatients} patients...`);

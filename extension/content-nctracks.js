@@ -237,6 +237,133 @@
 
   // ─── Form Fill & Submit ───
 
+  // ─── Form Element Discovery ───
+  // Since NCTracks uses dynamic JSF-style element IDs, we discover elements
+  // by scanning ALL selects/inputs and matching by label text or position.
+
+  function discoverFormElements() {
+    const elements = {
+      selects: [],
+      inputs: [],
+      buttons: [],
+    };
+
+    // Catalog all select elements
+    document.querySelectorAll("select").forEach((sel) => {
+      const label = findLabelFor(sel);
+      elements.selects.push({
+        el: sel,
+        id: sel.id || "",
+        name: sel.name || "",
+        label: label,
+        optionCount: sel.options.length,
+        options: Array.from(sel.options).slice(0, 5).map((o) => `${o.value}|${o.text.trim()}`),
+      });
+    });
+
+    // Catalog all text/date inputs
+    document.querySelectorAll("input").forEach((inp) => {
+      const type = (inp.type || "text").toLowerCase();
+      if (["hidden", "checkbox", "radio"].includes(type)) return;
+      const label = findLabelFor(inp);
+      elements.inputs.push({
+        el: inp,
+        id: inp.id || "",
+        name: inp.name || "",
+        type: type,
+        label: label,
+        placeholder: inp.placeholder || "",
+      });
+    });
+
+    // Catalog buttons/submit inputs
+    document.querySelectorAll("input[type='submit'], input[type='button'], button").forEach((btn) => {
+      elements.buttons.push({
+        el: btn,
+        id: btn.id || "",
+        value: btn.value || "",
+        text: (btn.textContent || "").trim(),
+        type: btn.type || "",
+      });
+    });
+
+    return elements;
+  }
+
+  function findLabelFor(el) {
+    // Try explicit label
+    if (el.id) {
+      const label = document.querySelector(`label[for="${el.id}"]`);
+      if (label) return label.textContent.trim();
+    }
+    // Try parent label
+    const parentLabel = el.closest("label");
+    if (parentLabel) return parentLabel.textContent.trim();
+    // Try preceding sibling or nearby text
+    const prev = el.previousElementSibling;
+    if (prev && (prev.tagName === "LABEL" || prev.tagName === "SPAN")) {
+      return prev.textContent.trim();
+    }
+    // Try parent's preceding td/th (table-based layout)
+    const td = el.closest("td");
+    if (td) {
+      const prevTd = td.previousElementSibling;
+      if (prevTd) return prevTd.textContent.trim();
+    }
+    return "";
+  }
+
+  function findByLabel(elements, labelPatterns, type) {
+    const list = type === "select" ? elements.selects : elements.inputs;
+    for (const pattern of labelPatterns) {
+      const re = new RegExp(pattern, "i");
+      for (const item of list) {
+        if (re.test(item.label) || re.test(item.id) || re.test(item.name)) {
+          return item.el;
+        }
+      }
+    }
+    return null;
+  }
+
+  function findButtonByLabel(elements, labelPatterns) {
+    for (const pattern of labelPatterns) {
+      const re = new RegExp(pattern, "i");
+      for (const item of elements.buttons) {
+        if (re.test(item.value) || re.test(item.text) || re.test(item.id)) {
+          return item.el;
+        }
+      }
+    }
+    return null;
+  }
+
+  function logFormDiscovery(elements) {
+    const lines = [];
+    lines.push(`Page: "${document.title}" | URL: ${location.href}`);
+    lines.push(`Found ${elements.selects.length} selects, ${elements.inputs.length} inputs, ${elements.buttons.length} buttons`);
+
+    for (const s of elements.selects) {
+      lines.push(`  SELECT: id="${s.id}" name="${s.name}" label="${s.label}" options(${s.optionCount}): [${s.options.join(", ")}]`);
+    }
+    for (const inp of elements.inputs) {
+      lines.push(`  INPUT: id="${inp.id}" name="${inp.name}" type="${inp.type}" label="${inp.label}" placeholder="${inp.placeholder}"`);
+    }
+    for (const btn of elements.buttons) {
+      lines.push(`  BUTTON: id="${btn.id}" value="${btn.value}" text="${btn.text}" type="${btn.type}"`);
+    }
+
+    // Send to background for logging
+    try {
+      chrome.runtime.sendMessage({
+        event: "contentScriptLog",
+        message: "FORM DISCOVERY:\n" + lines.join("\n"),
+      });
+    } catch { /* ignore */ }
+
+    return lines;
+  }
+
   async function fillAndCheck(patient, config) {
     const diagnostics = [];
 
@@ -250,62 +377,89 @@
         return { status: "ERROR", notes: "NCTracks error page detected" };
       }
 
-      // Click Clear to reset form
-      const clearBtn = findElement(CFG.CLEAR_SELECTORS);
+      // Discover all form elements on the page
+      const elements = discoverFormElements();
+      logFormDiscovery(elements);
+
+      // Click Clear to reset form (try config selectors first, then discover)
+      let clearBtn = findElement(CFG.CLEAR_SELECTORS);
+      if (!clearBtn) clearBtn = findButtonByLabel(elements, ["clear"]);
       if (clearBtn) {
         clearBtn.click();
         await delay(1000);
+        // Re-discover after clear since options may have reset
       }
 
-      // Set Group dropdown
-      const groupSelect = findElement(CFG.GROUP_SELECTORS);
+      // Set Group dropdown — try config selectors, then discover by label
+      let groupSelect = findElement(CFG.GROUP_SELECTORS);
+      if (!groupSelect) groupSelect = findByLabel(elements, ["group", "provider.*group", "grp"], "select");
       if (groupSelect) {
         const groupValue = config.defaultGroup || CFG.DEFAULT_GROUP;
         const groupSet = setSelect(groupSelect, groupValue);
         if (!groupSet) {
           diagnostics.push(`Group "${groupValue}" not found in dropdown`);
-          // List available options for troubleshooting
-          const options = Array.from(groupSelect.options).map((o) => o.value).filter((v) => v);
+          const options = Array.from(groupSelect.options).map((o) => `${o.value}="${o.text.trim()}"`).filter((v) => !v.startsWith("="));
           if (options.length > 0) {
-            diagnostics.push(`Available groups: ${options.slice(0, 5).join(", ")}${options.length > 5 ? "..." : ""}`);
+            diagnostics.push(`Available groups: ${options.slice(0, 8).join(", ")}`);
           }
         }
-        await delay(1000); // Wait for NPI dropdown to populate after group change
+        await delay(1500); // Wait for dependent dropdowns to populate
       } else {
-        diagnostics.push("Group dropdown not found");
+        diagnostics.push("Group dropdown not found on page");
+        // If there's only one select with options, it might be the group
+        const populatedSelects = elements.selects.filter((s) => s.optionCount > 1);
+        if (populatedSelects.length > 0) {
+          diagnostics.push(`Found ${populatedSelects.length} populated select(s) — first has ${populatedSelects[0].optionCount} options`);
+        }
       }
 
-      // Set NPI dropdown
-      const npiSelect = findElement(CFG.NPI_SELECTORS);
+      // Set NPI dropdown — try config selectors, then discover by label
+      let npiSelect = findElement(CFG.NPI_SELECTORS);
+      if (!npiSelect) npiSelect = findByLabel(elements, ["npi", "provider.*npi", "atypical", "servicing", "rendering"], "select");
       if (npiSelect) {
         // Wait for options to populate (they depend on group selection)
         try {
-          await waitFor(() => npiSelect.options.length > 1, 5000, 500);
+          await waitFor(() => npiSelect.options.length > 1, 8000, 500);
         } catch {
-          diagnostics.push("NPI dropdown did not populate within 5 seconds");
+          diagnostics.push("NPI dropdown did not populate within 8 seconds");
+          // Re-discover to see current state
+          const currentOpts = Array.from(npiSelect.options).map((o) => `${o.value}="${o.text.trim()}"`);
+          diagnostics.push(`NPI options now: [${currentOpts.join(", ")}]`);
         }
 
         const npiValue = config.defaultNpi || CFG.DEFAULT_NPI;
         const npiSet = setSelect(npiSelect, npiValue);
         if (!npiSet) {
           diagnostics.push(`NPI "${npiValue}" not found in dropdown`);
-          const options = Array.from(npiSelect.options).map((o) => o.value).filter((v) => v);
+          const options = Array.from(npiSelect.options).map((o) => `${o.value}="${o.text.trim()}"`).filter((v) => !v.startsWith("="));
           if (options.length > 0) {
-            diagnostics.push(`Available NPIs: ${options.slice(0, 5).join(", ")}${options.length > 5 ? "..." : ""}`);
+            diagnostics.push(`Available NPIs: ${options.slice(0, 8).join(", ")}`);
           }
         }
         await delay(500);
       } else {
-        diagnostics.push("NPI dropdown not found");
+        diagnostics.push("NPI dropdown not found on page");
       }
 
-      // Fill Recipient ID
-      const recipientField = findElement(CFG.RECIPIENT_ID_SELECTORS);
+      // Fill Recipient ID — try config selectors, then discover by label
+      let recipientField = findElement(CFG.RECIPIENT_ID_SELECTORS);
+      if (!recipientField) recipientField = findByLabel(elements, ["recipient", "medicaid", "member.*id", "beneficiary"], "input");
       if (!recipientField) {
-        const diag = getPageDiagnostics();
+        // Last resort: find first text input that isn't a date
+        const textInputs = elements.inputs.filter((i) =>
+          i.type === "text" && !i.label.toLowerCase().includes("date") &&
+          !i.label.toLowerCase().includes("service") && !i.name.toLowerCase().includes("date")
+        );
+        if (textInputs.length > 0) {
+          recipientField = textInputs[0].el;
+          diagnostics.push(`Using first text input as recipient field: id="${textInputs[0].id}" label="${textInputs[0].label}"`);
+        }
+      }
+
+      if (!recipientField) {
         return {
           status: "ERROR",
-          notes: `Recipient ID field not found. Page has ${diag.inputCount} inputs, ${diag.selectCount} selects. ${diagnostics.join("; ")}`,
+          notes: `Recipient ID field not found. ${diagnostics.join("; ")}`,
         };
       }
       fillInput(recipientField, patient.medicaid_id);
@@ -320,9 +474,21 @@
         }
       }
 
-      // Fill Date of Service From (today)
+      // Fill Date of Service From (today) — try config selectors, then discover
       const today = new Date();
-      const dosFromField = findElement(CFG.DOS_FROM_SELECTORS);
+      let dosFromField = findElement(CFG.DOS_FROM_SELECTORS);
+      if (!dosFromField) dosFromField = findByLabel(elements, ["date.*from", "from.*date", "service.*from", "dos.*from", "begin.*date", "start.*date"], "input");
+      if (!dosFromField) {
+        // Try finding date inputs by type or pattern
+        const dateInputs = elements.inputs.filter((i) =>
+          i.type === "date" || i.label.toLowerCase().includes("date") ||
+          i.name.toLowerCase().includes("date") || i.placeholder.includes("/")
+        );
+        if (dateInputs.length >= 1) {
+          dosFromField = dateInputs[0].el;
+          diagnostics.push(`Using discovered date input as DOS From: id="${dateInputs[0].id}" label="${dateInputs[0].label}"`);
+        }
+      }
       if (dosFromField) {
         fillInput(dosFromField, formatDate(today));
       } else {
@@ -333,7 +499,18 @@
       // Fill Date of Service To
       const dosToDate = new Date(today);
       dosToDate.setDate(dosToDate.getDate() + (config.dosRangeDays || CFG.DOS_RANGE_DAYS));
-      const dosToField = findElement(CFG.DOS_TO_SELECTORS);
+      let dosToField = findElement(CFG.DOS_TO_SELECTORS);
+      if (!dosToField) dosToField = findByLabel(elements, ["date.*to", "to.*date", "service.*to", "dos.*to", "end.*date", "thru.*date", "through.*date"], "input");
+      if (!dosToField) {
+        const dateInputs = elements.inputs.filter((i) =>
+          i.type === "date" || i.label.toLowerCase().includes("date") ||
+          i.name.toLowerCase().includes("date") || i.placeholder.includes("/")
+        );
+        if (dateInputs.length >= 2) {
+          dosToField = dateInputs[1].el;
+          diagnostics.push(`Using discovered date input as DOS To: id="${dateInputs[1].id}" label="${dateInputs[1].label}"`);
+        }
+      }
       if (dosToField) {
         fillInput(dosToField, formatDate(dosToDate));
       } else {
@@ -341,23 +518,24 @@
       }
       await delay(300);
 
-      // Click Check Eligibility
+      // Click Check Eligibility — try config selectors, then discover
       let checkBtn = findElement(CFG.CHECK_ELIGIBILITY_SELECTORS);
+      if (!checkBtn) checkBtn = findButtonByLabel(elements, ["check.*elig", "eligib", "verify", "search", "submit", "inquiry"]);
       if (!checkBtn) {
         checkBtn = findButtonWithText(
-          ["button", "input[type='submit']", "a.btn"],
-          ["Check Eligibility", "Search", "Submit", "Verify"]
+          ["button", "input[type='submit']", "a.btn", "a"],
+          ["Check Eligibility", "Check", "Search", "Submit", "Verify", "Inquiry"]
         );
       }
 
       if (!checkBtn) {
-        const diag = getPageDiagnostics();
         return {
           status: "ERROR",
-          notes: `"Check Eligibility" button not found. Page: "${diag.title}". ${diagnostics.join("; ")}`,
+          notes: `Submit button not found. ${diagnostics.join("; ")}`,
         };
       }
 
+      diagnostics.push(`Clicking button: value="${checkBtn.value || ""}" text="${(checkBtn.textContent || "").trim().substring(0, 30)}"`);
       checkBtn.click();
 
       // Wait for results to load
@@ -375,7 +553,8 @@
             text.includes("TERMINATED") ||
             text.includes("ERROR") ||
             text.includes("INACTIVE") ||
-            text.includes("PENDING");
+            text.includes("PENDING") ||
+            text.includes("COVERAGE");
         }, 20000, 1000);
       } catch {
         diagnostics.push("Result page did not show expected content within 20 seconds");
@@ -392,7 +571,7 @@
       if (diagnostics.length > 0 && !result.notes) {
         result.notes = diagnostics.join("; ");
       } else if (diagnostics.length > 0) {
-        result.notes += ` | ${diagnostics.join("; ")}`;
+        result.notes += " | " + diagnostics.join("; ");
       }
 
       return result;
