@@ -172,6 +172,7 @@ const NCTRACKS_CONFIG = {
   // Passage Health EMR
   PASSAGEHEALTH_LOGIN_URL: "https://clinical.passagehealth.com",
   PASSAGEHEALTH_REPORTS_URL: "https://clinical.passagehealth.com/dashboard/reporting/clients",
+  PASSAGEHEALTH_FUNDING_SOURCES_URL: "https://clinical.passagehealth.com/dashboard/reporting/clients/funding-sources",
   PASSAGEHEALTH_FUNDING_SOURCES: [
     "Alliance Behavioral Health NC",
     "Amerihealth Caritas North Carolina",

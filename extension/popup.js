@@ -1248,7 +1248,7 @@
       const wb = XLSX.utils.book_new();
       const headers = [
         "Medicaid ID", "Name", "Status",
-        "EMR Funding Source",
+        "EMR Funding Source", "Insurance Type",
         "Managing Entity (Current)", "Current Period", "Payer Changed?",
         "Managing Entity (Next)", "Next Period", "Payer Changed (Next)?",
         "Checked At", "Notes",
@@ -1258,7 +1258,7 @@
       for (const r of currentResults) {
         wsData.push([
           r.medicaid_id, r.name, r.status,
-          r.emr_funding_source || "",
+          r.emr_funding_source || "", r.insurance_type || "",
           r.managing_entity || "", r.current_period || r.coverage_dates || "", r.payer_changed || "",
           r.managing_entity_next || "", r.next_period || "", r.payer_changed_next || "",
           r.checked_at, r.notes || "",
@@ -1293,8 +1293,8 @@
           }
         }
 
-        // Style "Payer Changed?" columns (6 and 9) — highlight YES in red
-        for (const pcCol of [6, 9]) {
+        // Style "Payer Changed?" columns (7 and 10) — highlight YES in red
+        for (const pcCol of [7, 10]) {
           const pcCell = ws[XLSX.utils.encode_cell({ r, c: pcCol })];
           if (pcCell) {
             const pcVal = (pcCell.v || "").toUpperCase();
@@ -1312,6 +1312,7 @@
         { wch: 25 },  // Name
         { wch: 16 },  // Status
         { wch: 32 },  // EMR Funding Source
+        { wch: 14 },  // Insurance Type
         { wch: 35 },  // Managing Entity (Current)
         { wch: 28 },  // Current Period
         { wch: 16 },  // Payer Changed?

@@ -516,6 +516,174 @@
     };
   }
 
+  // ─── Payer Filter (Funding Sources Report) ───
+
+  async function applyPayerFilters() {
+    log("Applying Payer filters on Funding Sources report...");
+    logPageState();
+
+    await delay(2000);
+
+    const diagnostics = [];
+    const targetPayers = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
+
+    // ── Step 1: Open the filter panel ──
+    log("Opening filter panel...");
+    let filterPanelOpened = false;
+
+    // Use same strategies as applyFilters to find the filter toggle
+    const allBtns = document.querySelectorAll("button");
+
+    // Strategy: Find button with aria-haspopup="dialog" and filter SVG icon
+    let filterToggle = null;
+    const dialogBtns = document.querySelectorAll('button[aria-haspopup="dialog"]');
+    for (const btn of dialogBtns) {
+      const svg = btn.querySelector("svg");
+      if (!svg) continue;
+      const pathData = Array.from(svg.querySelectorAll("path"))
+        .map((p) => p.getAttribute("d") || "").join(" ");
+      if (/M\d+\s+6h\d+/.test(pathData) && /M\d+\s+12h\d+/.test(pathData) && /M\d+\s+18h\d+/.test(pathData)) {
+        filterToggle = btn;
+        break;
+      }
+      const hLines = (pathData.match(/h\d+/g) || []).length;
+      if (hLines >= 3 && !pathData.includes("v") && !pathData.includes("V") && !pathData.includes("C") && !pathData.includes("c")) {
+        filterToggle = btn;
+        break;
+      }
+    }
+
+    // Fallback: aria-label/title with "filter"
+    if (!filterToggle) {
+      for (const btn of allBtns) {
+        const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+        const title = (btn.getAttribute("title") || "").toLowerCase();
+        if (ariaLabel.includes("filter") || title.includes("filter")) {
+          filterToggle = btn;
+          break;
+        }
+      }
+    }
+
+    // Fallback: SVG content keywords
+    if (!filterToggle) {
+      for (const btn of allBtns) {
+        const svg = btn.querySelector("svg");
+        if (svg) {
+          const svgHtml = (svg.outerHTML || "").toLowerCase();
+          if (svgHtml.includes("filter") || svgHtml.includes("icon-adjustments")) {
+            filterToggle = btn;
+            break;
+          }
+        }
+      }
+    }
+
+    if (filterToggle) {
+      log("Clicking filter panel toggle...");
+      clickElement(filterToggle);
+      await delay(1500);
+      filterPanelOpened = true;
+    } else {
+      log("Could not find filter panel toggle");
+      diagnostics.push("Filter panel toggle not found");
+    }
+
+    if (!filterPanelOpened) {
+      return { status: "ERROR", payerApplied: false, diagnostics: diagnostics.join("; ") };
+    }
+
+    // ── Step 2: Select Payers ──
+    log(`Selecting ${targetPayers.length} payers in Payer filter...`);
+    let payerApplied = false;
+
+    // Find the Payer search input — look for the Mantine MultiSelect search input
+    // The Payer filter label is "Payer" in the filter panel
+    const payerInput = await findAndClickFilterDropdown("Payer");
+    if (!payerInput) {
+      diagnostics.push("Payer filter dropdown not found");
+    } else {
+      let selectedCount = 0;
+      for (const payerName of targetPayers) {
+        log(`Typing "${payerName}" into Payer search...`);
+        setInputValue(payerInput, payerName);
+        await delay(800);
+
+        logMantineDropdown();
+
+        const option = findMantineOption(payerName);
+        if (option) {
+          clickElement(option);
+          selectedCount++;
+          log(`Selected payer: "${payerName}"`);
+          await delay(500);
+        } else {
+          log(`Could not find payer option: "${payerName}"`);
+          diagnostics.push(`Payer not found: "${payerName}"`);
+        }
+
+        // Clear search for next payer
+        setInputValue(payerInput, "");
+        await delay(300);
+      }
+
+      if (selectedCount > 0) {
+        payerApplied = true;
+        log(`Selected ${selectedCount}/${targetPayers.length} payers`);
+      }
+
+      // Close the dropdown
+      payerInput.blur();
+      await delay(500);
+    }
+
+    // ── Step 3: Click "Done" button ──
+    log("Looking for Done button...");
+    let doneBtn = null;
+    for (const btn of document.querySelectorAll("button")) {
+      const text = (btn.textContent || "").trim();
+      if (/^done$/i.test(text)) {
+        doneBtn = btn;
+        break;
+      }
+    }
+    if (!doneBtn) {
+      doneBtn = document.querySelector('button[class*="bg-primary"]');
+    }
+
+    if (doneBtn) {
+      log(`Clicking Done button: "${(doneBtn.textContent || "").trim()}"...`);
+      clickElement(doneBtn);
+      await delay(2000);
+    } else {
+      log("No Done button found — filters may auto-apply");
+    }
+
+    // ── Step 4: Wait for table to update ──
+    if (payerApplied) {
+      log("Payer filters applied — waiting for table to update...");
+      await delay(3000);
+      try {
+        await waitFor(() => {
+          const tables = document.querySelectorAll("table");
+          const rows = document.querySelectorAll("table tbody tr, table tr");
+          return tables.length > 0 && rows.length > 1;
+        }, 30000, 1000);
+        log("Table loaded after payer filter");
+      } catch {
+        log("Timeout waiting for table update after payer filter");
+      }
+    }
+
+    logPageState();
+
+    return {
+      status: payerApplied ? "OK" : "PARTIAL",
+      payerApplied,
+      diagnostics: diagnostics.join("; "),
+    };
+  }
+
   // ─── Mantine UI Helpers ───
   // Passage Health uses Mantine UI. Dropdowns render in portals at end of document.body.
   // Options use classes like mantine-Combobox-option, and the dropdown container
@@ -736,7 +904,17 @@
         if (/^(LAST\s*NAME)$/i.test(h)) colIdx.last_name = idx;
         if (h.includes("FUNDING") || h.includes("PAYER") || h.includes("INSURANCE")) colIdx.funding = idx;
         if (h.includes("MEDICAID") && h.includes("ID")) colIdx.medicaid_id = idx;
+        // Funding Sources report: "Member ID" column holds the Medicaid ID
+        if (/^MEMBER\s*ID$/.test(h)) colIdx.member_id = idx;
+        // "Client ID" is the internal EMR ID, not Medicaid ID
+        if (/^CLIENT\s*ID$/.test(h)) colIdx.client_id = idx;
+        // "Type" column = Primary/Secondary insurance type
+        if (/^TYPE$/.test(h)) colIdx.insurance_type = idx;
         if (h.includes("STATUS")) colIdx.status = idx;
+        // Additional Funding Sources columns
+        if (/^PLAN\s*NAME$/.test(h)) colIdx.plan_name = idx;
+        if (/^GROUP\s*NUMBER$/.test(h)) colIdx.group_number = idx;
+        if (/^START/.test(h)) colIdx.start_date = idx;
       });
 
       log(`Column mapping: ${JSON.stringify(colIdx)}`);
@@ -779,9 +957,12 @@
 
         // Get funding source / payer info
         let fundingText = getText(colIdx.funding);
-        let medicaidId = getText(colIdx.medicaid_id);
+        // Funding Sources report has a dedicated "Member ID" column for Medicaid ID
+        let medicaidId = getText(colIdx.member_id) || getText(colIdx.medicaid_id);
+        // Insurance type (Primary/Secondary) from the Funding Sources report
+        let insuranceType = getText(colIdx.insurance_type);
 
-        // If no dedicated Medicaid ID column, extract from funding source text
+        // If no dedicated Medicaid/Member ID column, extract from funding source text
         if (!medicaidId && fundingText) {
           const idMatch = fundingText.match(/\b(\d{9,12}[A-Za-z])\b/);
           if (idMatch) medicaidId = idMatch[1];
@@ -799,20 +980,18 @@
           }
         }
 
-        // Extract the funding source name (strip out Medicaid IDs and separators)
-        // EMR format: "Trillium Health Resources NC  • 954658053S" or multiple:
-        // "Healthy Blue North Carolina  • 955193280NTrillium Health Resources NC  • 956669255M"
+        // Extract the funding source / payer name
+        // In the Funding Sources report, the "Payer" column is already clean
         let emrFundingSource = fundingText;
         if (emrFundingSource) {
-          // Remove Medicaid IDs
+          // Remove Medicaid IDs if embedded
           emrFundingSource = emrFundingSource.replace(/\b\d{9,12}[A-Za-z]\b/g, "").trim();
           // Remove bullet separators and dashes, then clean up whitespace
           emrFundingSource = emrFundingSource.replace(/[•·●]/g, "").replace(/[-–—]\s*$/, "").replace(/^\s*[-–—]/, "").trim();
           // Clean up multiple spaces
           emrFundingSource = emrFundingSource.replace(/\s{2,}/g, " ").trim();
 
-          // Split on remaining payer name boundaries — after cleanup, multiple sources
-          // become "Payer One  Payer Two" or similar. Try to match known sources.
+          // Try to match known sources
           const knownSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
           const matchedSource = knownSources.find((fs) => emrFundingSource.toLowerCase().includes(fs.toLowerCase()));
           if (matchedSource) {
@@ -838,9 +1017,14 @@
             last_name: lastName,
             medicaid_id: medicaidId,
             emr_funding_source: emrFundingSource || "",
+            insurance_type: insuranceType || "",
+            plan_name: getText(colIdx.plan_name) || "",
+            group_number: getText(colIdx.group_number) || "",
+            start_date: getText(colIdx.start_date) || "",
+            client_id: getText(colIdx.client_id) || "",
           });
           if (patients.length <= 5 || patients.length % 25 === 0) {
-            log(`Row ${r + 1}: Name="${fullName}", Funding="${fundingText.substring(0, 60)}", ID=${medicaidId}, Source="${emrFundingSource}", Status="${statusText || "n/a"}"`);
+            log(`Row ${r + 1}: Name="${fullName}", Payer="${emrFundingSource}", Type="${insuranceType}", ID=${medicaidId}, Status="${statusText || "n/a"}"`);
           }
         } else if (fullName) {
           diagnostics.push(`Row ${r + 1}: ${fullName} — no Medicaid ID found`);
@@ -1235,6 +1419,17 @@
         .catch((err) => {
           logError("emrApplyFilters", err);
           sendResponse({ status: "ERROR", diagnostics: err.message });
+        });
+      return true; // async
+    }
+
+    if (msg.action === "emrApplyPayerFilters") {
+      log("Received emrApplyPayerFilters command");
+      applyPayerFilters()
+        .then((result) => sendResponse(result))
+        .catch((err) => {
+          logError("emrApplyPayerFilters", err);
+          sendResponse({ status: "ERROR", payerApplied: false, diagnostics: err.message });
         });
       return true; // async
     }

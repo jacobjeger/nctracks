@@ -7,6 +7,7 @@ const PROVIDER_PORTAL_LOGIN = "https://www.nctracks.nc.gov/ncmmisPortal/loginAct
 const ELIGIBILITY_INQUIRY_URL = "https://www.nctracks.nc.gov/DirectConnect/Eligibility/Inquiry";
 const PASSAGEHEALTH_LOGIN_URL = "https://clinical.passagehealth.com";
 const PASSAGEHEALTH_REPORTS_URL = "https://clinical.passagehealth.com/dashboard/reporting/clients";
+const PASSAGEHEALTH_FUNDING_SOURCES_URL = "https://clinical.passagehealth.com/dashboard/reporting/clients/funding-sources";
 const EMR_PAGE_LOAD_DELAY_MS = 3000;
 const EMR_MAX_PAGES = 100; // Safety limit for pagination
 const MAX_RETRIES = 3;
@@ -727,45 +728,35 @@ async function startFromEMR() {
       addLog("Already logged into EMR");
     }
 
-    // ── Navigate to Reports Page via Sidebar ──
-    addLog("=== Phase: EMR Scrape ===");
+    // ── Navigate to Funding Sources Report ──
+    addLog("=== Phase: EMR Scrape (Funding Sources) ===");
     state.status = "emr_scraping";
     saveState();
     broadcastToPopup({ type: "emrProgress", phase: "navigating", patientsFound: 0 });
 
-    addLog("Navigating to Client Reports via sidebar navigation...");
-    const navResult = await sendToTab(state.tabId, { action: "emrNavigateToReports" });
-    addLog(`Sidebar navigation result: status=${navResult.status}, url=${navResult.url || "?"}, pageType=${navResult.pageType || "?"}`);
-
-    if (navResult.status === "ERROR") {
-      // Fallback: try direct URL navigation as last resort
-      addLog(`Sidebar navigation failed: ${navResult.notes} — falling back to direct URL...`);
-      await chrome.tabs.update(state.tabId, { url: PASSAGEHEALTH_REPORTS_URL });
-      await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
-      await delay(EMR_PAGE_LOAD_DELAY_MS);
-    } else if (navResult.status === "PARTIAL") {
-      addLog(`Sidebar navigation partial — waiting extra time for page to settle...`);
-      await delay(EMR_PAGE_LOAD_DELAY_MS);
-    }
+    addLog("Navigating to Funding Sources report...");
+    await chrome.tabs.update(state.tabId, { url: PASSAGEHEALTH_FUNDING_SOURCES_URL });
+    await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+    await delay(EMR_PAGE_LOAD_DELAY_MS);
 
     // Verify we're on the reports page
     try {
       pageCheck = await sendToTab(state.tabId, { action: "emrCheckPage" });
-      addLog(`Reports page — type: ${pageCheck.pageType}, URL: ${pageCheck.url}`);
+      addLog(`Funding Sources page — type: ${pageCheck.pageType}, URL: ${pageCheck.url}`);
     } catch (err) {
-      addLog(`Could not verify reports page: ${err.message}`);
+      addLog(`Could not verify Funding Sources page: ${err.message}`);
     }
 
     if (pageCheck.pageType !== "reports") {
       addLog(`Warning: May not be on reports page (type=${pageCheck.pageType}). Attempting to continue anyway...`);
     }
 
-    // ── Apply Filters ──
-    addLog("Applying filters (Active status, funding sources)...");
+    // ── Apply Payer Filters ──
+    addLog("Applying Payer filters on Funding Sources report...");
     broadcastToPopup({ type: "emrProgress", phase: "filtering", patientsFound: 0 });
 
-    const filterResult = await sendToTab(state.tabId, { action: "emrApplyFilters" });
-    addLog(`Filter result: status=${filterResult.status}, statusApplied=${filterResult.statusApplied}, fundingApplied=${filterResult.fundingApplied}`);
+    const filterResult = await sendToTab(state.tabId, { action: "emrApplyPayerFilters" });
+    addLog(`Filter result: status=${filterResult.status}, payerApplied=${filterResult.payerApplied}`);
     if (filterResult.diagnostics) addLog(`Filter diagnostics: ${filterResult.diagnostics}`);
 
     // ── Scrape All Pages ──
@@ -799,34 +790,29 @@ async function startFromEMR() {
       await delay(1000);
     }
 
-    // ── Deduplicate ──
+    // ── Deduplicate exact duplicates only (same patient + same payer = same row scraped twice) ──
+    // Keep rows where the same patient has different payers (two active insurances)
     const beforeDedup = allPatients.length;
-    const seen = new Map();
+    const seen = new Set();
+    const deduped = [];
     for (const p of allPatients) {
-      if (!seen.has(p.medicaid_id)) {
-        seen.set(p.medicaid_id, p);
+      const key = `${p.medicaid_id}|${(p.emr_funding_source || "").toLowerCase()}|${(p.insurance_type || "").toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(p);
       }
     }
-    allPatients = Array.from(seen.values());
-    addLog(`EMR scrape complete: ${beforeDedup} patients found across ${pageNum} pages`);
+    allPatients = deduped;
+    addLog(`EMR scrape complete: ${beforeDedup} rows found across ${pageNum} pages`);
     if (beforeDedup !== allPatients.length) {
-      addLog(`Deduplicated: ${beforeDedup} → ${allPatients.length} unique Medicaid IDs`);
+      addLog(`Removed ${beforeDedup - allPatients.length} exact duplicate rows → ${allPatients.length} rows remaining`);
     }
-
-    // ── Post-scrape filtering (safety net) ──
-    // Filter by configured funding sources in case UI filters weren't applied
-    const cfg = typeof NCTRACKS_CONFIG !== "undefined" ? NCTRACKS_CONFIG : (globalThis.NCTRACKS_CONFIG || {});
-    const allowedSources = cfg.PASSAGEHEALTH_FUNDING_SOURCES || [];
-    if (allowedSources.length > 0 && allPatients.length > 0) {
-      const beforeFundingFilter = allPatients.length;
-      allPatients = allPatients.filter((p) => {
-        if (!p.emr_funding_source) return false;
-        const src = p.emr_funding_source.toLowerCase();
-        return allowedSources.some((allowed) => src.includes(allowed.toLowerCase()));
-      });
-      if (allPatients.length < beforeFundingFilter) {
-        addLog(`Post-scrape funding filter: ${beforeFundingFilter} → ${allPatients.length} patients (removed ${beforeFundingFilter - allPatients.length} with non-matching funding sources)`);
-      }
+    const multiInsurance = allPatients.filter((p) => {
+      return allPatients.filter((q) => q.medicaid_id === p.medicaid_id).length > 1;
+    });
+    if (multiInsurance.length > 0) {
+      const uniqueMulti = new Set(multiInsurance.map((p) => p.medicaid_id));
+      addLog(`${uniqueMulti.size} patients have multiple active insurances (${multiInsurance.length} total rows)`);
     }
 
     broadcastToPopup({ type: "emrProgress", phase: "complete", patientsFound: allPatients.length });
@@ -900,6 +886,7 @@ async function processNextPatient() {
           name: `${p.first_name || ""} ${p.last_name || ""}`.trim(),
           status: "SKIPPED",
           emr_funding_source: p.emr_funding_source || "",
+          insurance_type: p.insurance_type || "",
           managing_entity: "",
           managing_entity_next: "",
           current_period: "",
@@ -1036,6 +1023,7 @@ async function processNextPatient() {
             name: patientName,
             status: fillResult.status,
             emr_funding_source: patient.emr_funding_source || "",
+            insurance_type: patient.insurance_type || "",
             managing_entity: "",
             managing_entity_next: "",
             current_period: "",
@@ -1190,6 +1178,7 @@ async function processNextPatient() {
           name: validated.name,
           status: finalStatus,
           emr_funding_source: emrSource,
+          insurance_type: patient.insurance_type || "",
           managing_entity: currentEntity || "(none)",
           managing_entity_next: nextEntity || "(none)",
           current_period: currentPeriod,
@@ -1230,6 +1219,7 @@ async function processNextPatient() {
         name: patientName,
         status: "ERROR",
         emr_funding_source: patient.emr_funding_source || "",
+        insurance_type: patient.insurance_type || "",
         managing_entity: "",
         managing_entity_next: "",
         current_period: "",
