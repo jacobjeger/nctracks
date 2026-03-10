@@ -1,7 +1,14 @@
 /* Background service worker — orchestrates the full verification flow. */
 
+// Import shared config (available in service worker via importScripts)
+try { importScripts("config.js"); } catch { /* may already be loaded */ }
+
 const PROVIDER_PORTAL_LOGIN = "https://www.nctracks.nc.gov/ncmmisPortal/loginAction?flow=PP";
 const ELIGIBILITY_INQUIRY_URL = "https://www.nctracks.nc.gov/DirectConnect/Eligibility/Inquiry";
+const PASSAGEHEALTH_LOGIN_URL = "https://clinical.passagehealth.com";
+const PASSAGEHEALTH_REPORTS_URL = "https://clinical.passagehealth.com/dashboard/reporting/clients";
+const EMR_PAGE_LOAD_DELAY_MS = 3000;
+const EMR_MAX_PAGES = 100; // Safety limit for pagination
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 5000;
 const INTER_PATIENT_DELAY_MS = 1500;
@@ -487,6 +494,190 @@ async function navigateToEligibility() {
   }
 }
 
+// ─── EMR Orchestration ───
+
+async function startFromEMR() {
+  addLog("=== Phase: EMR Login ===");
+  state.status = "emr_login";
+  saveState();
+  sendProgress();
+
+  try {
+    await ensureTab();
+    addLog(`Opening Passage Health login page: ${PASSAGEHEALTH_LOGIN_URL}`);
+    await chrome.tabs.update(state.tabId, { url: PASSAGEHEALTH_LOGIN_URL });
+    await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+    await delay(EMR_PAGE_LOAD_DELAY_MS);
+
+    // Check what page we're on
+    let pageCheck;
+    try {
+      pageCheck = await sendToTab(state.tabId, { action: "emrCheckPage" });
+      addLog(`EMR page type: ${pageCheck.pageType} — URL: ${pageCheck.url}`);
+    } catch (err) {
+      addLog(`Could not check EMR page: ${err.message} — trying login anyway...`);
+      pageCheck = { pageType: "login" };
+    }
+
+    if (pageCheck.pageType === "login") {
+      // Need to log in
+      addLog("Sending login credentials to EMR...");
+      const loginResult = await sendToTab(state.tabId, {
+        action: "emrLogin",
+        email: state.emrCredentials.email,
+        password: state.emrCredentials.password,
+      });
+      addLog(`EMR login result: ${loginResult.status} — ${loginResult.notes || ""}`);
+
+      if (loginResult.status === "ERROR") {
+        broadcastError("emr_login_failed", `EMR login failed: ${loginResult.notes}`);
+        return;
+      }
+
+      // Wait for navigation after login
+      addLog("Waiting for EMR login to complete...");
+      await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+      await delay(EMR_PAGE_LOAD_DELAY_MS);
+
+      // Verify we're logged in
+      try {
+        pageCheck = await sendToTab(state.tabId, { action: "emrCheckPage" });
+        addLog(`After login — page type: ${pageCheck.pageType}, URL: ${pageCheck.url}`);
+      } catch {
+        addLog("Could not verify login — proceeding anyway...");
+      }
+
+      if (pageCheck.pageType === "login") {
+        // Still on login page — credentials may be wrong
+        broadcastError("emr_login_failed", "EMR login failed — still on login page. Check your credentials.");
+        return;
+      }
+    } else if (pageCheck.pageType === "dashboard" || pageCheck.pageType === "reports") {
+      addLog("Already logged into EMR");
+    }
+
+    // ── Navigate to Reports Page ──
+    addLog("=== Phase: EMR Scrape ===");
+    state.status = "emr_scraping";
+    saveState();
+    broadcastToPopup({ type: "emrProgress", phase: "navigating", patientsFound: 0 });
+
+    addLog(`Navigating to Client Reports: ${PASSAGEHEALTH_REPORTS_URL}`);
+    await chrome.tabs.update(state.tabId, { url: PASSAGEHEALTH_REPORTS_URL });
+    await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+    await delay(EMR_PAGE_LOAD_DELAY_MS);
+
+    // Verify we're on the reports page
+    try {
+      pageCheck = await sendToTab(state.tabId, { action: "emrCheckPage" });
+      addLog(`Reports page — type: ${pageCheck.pageType}, URL: ${pageCheck.url}`);
+    } catch (err) {
+      addLog(`Could not verify reports page: ${err.message}`);
+    }
+
+    // ── Apply Filters ──
+    addLog("Applying filters (Active status, funding sources)...");
+    broadcastToPopup({ type: "emrProgress", phase: "filtering", patientsFound: 0 });
+
+    const filterResult = await sendToTab(state.tabId, { action: "emrApplyFilters" });
+    addLog(`Filter result: status=${filterResult.status}, statusApplied=${filterResult.statusApplied}, fundingApplied=${filterResult.fundingApplied}`);
+    if (filterResult.diagnostics) addLog(`Filter diagnostics: ${filterResult.diagnostics}`);
+
+    // ── Scrape All Pages ──
+    addLog("Scraping patient data from report...");
+    let allPatients = [];
+    let pageNum = 0;
+
+    while (pageNum < EMR_MAX_PAGES) {
+      pageNum++;
+      addLog(`Scraping page ${pageNum}...`);
+      broadcastToPopup({ type: "emrProgress", phase: "scraping", page: pageNum, patientsFound: allPatients.length });
+
+      const scrapeResult = await sendToTab(state.tabId, { action: "emrScrapePage" });
+      addLog(`Page ${pageNum}: ${scrapeResult.patients ? scrapeResult.patients.length : 0} patients found (status: ${scrapeResult.status})`);
+
+      if (scrapeResult.patients && scrapeResult.patients.length > 0) {
+        allPatients = allPatients.concat(scrapeResult.patients);
+      }
+
+      if (scrapeResult.status === "ERROR" || scrapeResult.status === "NO_TABLE") {
+        addLog(`Scrape issue on page ${pageNum}: ${scrapeResult.diagnostics || scrapeResult.status}`);
+        break;
+      }
+
+      // Try next page
+      const nextResult = await sendToTab(state.tabId, { action: "emrNextPage" });
+      if (!nextResult.hasMore) {
+        addLog(`No more pages after page ${pageNum}`);
+        break;
+      }
+      await delay(1000);
+    }
+
+    // ── Deduplicate ──
+    const beforeDedup = allPatients.length;
+    const seen = new Map();
+    for (const p of allPatients) {
+      if (!seen.has(p.medicaid_id)) {
+        seen.set(p.medicaid_id, p);
+      }
+    }
+    allPatients = Array.from(seen.values());
+    addLog(`EMR scrape complete: ${beforeDedup} patients found across ${pageNum} pages`);
+    if (beforeDedup !== allPatients.length) {
+      addLog(`Deduplicated: ${beforeDedup} → ${allPatients.length} unique Medicaid IDs`);
+    }
+
+    broadcastToPopup({ type: "emrProgress", phase: "complete", patientsFound: allPatients.length });
+
+    if (allPatients.length === 0) {
+      broadcastError("emr_scrape_failed", "No patients found in EMR report. Check filters and report data.");
+      return;
+    }
+
+    // ── Store patients and proceed to NCTracks ──
+    state.patients = allPatients;
+    state.totalPatients = allPatients.length;
+    state.currentIndex = 0;
+    state.results = [];
+    saveState();
+
+    addLog(`=== Phase: NCTracks Login ===`);
+    addLog(`Proceeding to verify ${state.totalPatients} patients on NCTracks...`);
+    broadcastToPopup({ type: "emrProgress", phase: "nctracks", patientsFound: allPatients.length });
+    sendProgress();
+
+    // Now start the NCTracks login flow
+    state.loginRetryCount = 0;
+    await startLogin();
+
+  } catch (err) {
+    addLog(`EMR flow error: ${err.message}`);
+    broadcastError("emr_error", `EMR error: ${err.message}`);
+  }
+}
+
+// ─── Payer Comparison ───
+
+function checkPayerChanged(emrFundingSource, ncTracksEntity) {
+  if (!emrFundingSource || !ncTracksEntity) return "";
+  const mapping = typeof NCTRACKS_CONFIG !== "undefined" ? NCTRACKS_CONFIG.PAYER_MAPPING : (globalThis.NCTRACKS_CONFIG || {}).PAYER_MAPPING;
+  if (!mapping) return "";
+  // Try to find the matching mapping key
+  let expectedPattern = mapping[emrFundingSource];
+  if (!expectedPattern) {
+    // Fuzzy match — check if the EMR source contains any known key
+    for (const [key, pattern] of Object.entries(mapping)) {
+      if (emrFundingSource.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(emrFundingSource.toLowerCase())) {
+        expectedPattern = pattern;
+        break;
+      }
+    }
+  }
+  if (!expectedPattern) return "UNKNOWN";
+  return ncTracksEntity.toUpperCase().includes(expectedPattern.toUpperCase()) ? "NO" : "YES";
+}
+
 // ─── Batch Processing ───
 
 async function processNextPatient() {
@@ -507,10 +698,13 @@ async function processNextPatient() {
           medicaid_id: p.medicaid_id,
           name: `${p.first_name || ""} ${p.last_name || ""}`.trim(),
           status: "SKIPPED",
+          emr_funding_source: p.emr_funding_source || "",
           managing_entity: "",
           managing_entity_next: "",
           current_period: "",
           next_period: "",
+          payer_changed: "",
+          payer_changed_next: "",
           checked_at: new Date().toISOString(),
           notes: "Stopped by user",
         });
@@ -617,10 +811,13 @@ async function processNextPatient() {
             medicaid_id: patient.medicaid_id,
             name: patientName,
             status: fillResult.status,
+            emr_funding_source: patient.emr_funding_source || "",
             managing_entity: "",
             managing_entity_next: "",
             current_period: "",
             next_period: "",
+            payer_changed: "",
+            payer_changed_next: "",
             checked_at: new Date().toISOString(),
             notes: fillResult.notes || "",
           });
@@ -692,19 +889,29 @@ async function processNextPatient() {
           addLog(`  Could not scrape next period: ${nextErr.message}`);
         }
 
+        const emrSource = patient.emr_funding_source || "";
+        const payerChanged = checkPayerChanged(emrSource, currentEntity);
+        const payerChangedNext = checkPayerChanged(emrSource, nextEntity);
+        if (emrSource) {
+          addLog(`  Payer check: EMR="${emrSource}" vs NCTracks="${currentEntity}" → ${payerChanged === "YES" ? "CHANGED" : payerChanged === "NO" ? "Match" : payerChanged}`);
+        }
+
         state.results.push({
           medicaid_id: patient.medicaid_id,
           name: result.recipient_name || patientName,
           status: result.status || "UNKNOWN",
+          emr_funding_source: emrSource,
           managing_entity: currentEntity,
           managing_entity_next: nextEntity,
           current_period: currentPeriod,
           next_period: nextPeriod,
+          payer_changed: payerChanged,
+          payer_changed_next: payerChangedNext,
           checked_at: new Date().toISOString(),
           notes: result.notes || "",
         });
 
-        addLog(`  Result: ${result.status} — ${result.recipient_name || ""} | Entity: ${currentEntity} | Next: ${nextEntity}`);
+        addLog(`  Result: ${result.status} — ${result.recipient_name || ""} | Entity: ${currentEntity} | Next: ${nextEntity}${payerChanged ? " | PayerChanged: " + payerChanged : ""}`);
         succeeded = true;
         break;
       } catch (err) {
@@ -732,10 +939,13 @@ async function processNextPatient() {
         medicaid_id: patient.medicaid_id,
         name: patientName,
         status: "ERROR",
+        emr_funding_source: patient.emr_funding_source || "",
         managing_entity: "",
         managing_entity_next: "",
         current_period: "",
         next_period: "",
+        payer_changed: "",
+        payer_changed_next: "",
         checked_at: new Date().toISOString(),
         notes: `Failed after ${MAX_RETRIES} attempts: ${lastError}`,
       });
@@ -868,6 +1078,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
   }
 
+  // ── From Passage Health EMR content script ──
+
+  if (msg.event === "emrPageReady") {
+    addLog(`EMR page ready: type=${msg.pageType}, URL=${msg.url || "unknown"}`);
+  }
+
   // ── From NCTracks content script ──
 
   if (msg.event === "ncTracksPageReady") {
@@ -933,6 +1149,45 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     // Always create a dedicated tab — don't hijack the user's current tab
     startLogin();
+
+    sendResponse({ started: true });
+  }
+
+  if (msg.action === "startFromEMR") {
+    state = {
+      status: "idle",
+      patients: [],
+      results: [],
+      currentIndex: 0,
+      totalPatients: 0,
+      config: msg.config || {},
+      credentials: msg.ncidCredentials || {},
+      emrCredentials: msg.emrCredentials || {},
+      tabId: null,
+      log: [],
+      pendingPassword: null,
+      stopRequested: false,
+      lastErrorType: null,
+      mfaStartTime: null,
+      loginRetryCount: 0,
+    };
+
+    if (!state.emrCredentials.email || !state.emrCredentials.password) {
+      sendResponse({ started: false, error: "EMR credentials are required" });
+      return true;
+    }
+
+    if (!state.credentials.username || !state.credentials.password) {
+      sendResponse({ started: false, error: "NCID credentials are required" });
+      return true;
+    }
+
+    processingActive = false;
+    updateBadge();
+    startKeepalive();
+    addLog("Starting EMR → NCTracks verification flow...");
+
+    startFromEMR();
 
     sendResponse({ started: true });
   }
@@ -1010,11 +1265,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ saved: true });
   }
 
+  if (msg.action === "saveEmrCredentials") {
+    chrome.storage.local.set({
+      savedEmrEmail: msg.email,
+      savedEmrPassword: msg.password,
+    });
+    sendResponse({ saved: true });
+  }
+
   if (msg.action === "loadCredentials") {
-    chrome.storage.local.get(["savedUsername", "savedPassword"], (data) => {
+    chrome.storage.local.get(["savedUsername", "savedPassword", "savedEmrEmail", "savedEmrPassword"], (data) => {
       sendResponse({
         username: data.savedUsername || "",
         password: data.savedPassword || "",
+        emrEmail: data.savedEmrEmail || "",
+        emrPassword: data.savedEmrPassword || "",
       });
     });
     return true; // async response

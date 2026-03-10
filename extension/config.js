@@ -147,6 +147,31 @@ const NCTRACKS_CONFIG = {
     plan_name: ['td:has(~ td)', 'span[id*="planName"]'],
   },
 
+  // Passage Health EMR
+  PASSAGEHEALTH_LOGIN_URL: "https://clinical.passagehealth.com",
+  PASSAGEHEALTH_REPORTS_URL: "https://clinical.passagehealth.com/dashboard/reporting/clients",
+  PASSAGEHEALTH_FUNDING_SOURCES: [
+    "Alliance Behavioral Health NC",
+    "Amerihealth Caritas North Carolina",
+    "Healthy Blue North Carolina",
+    "Partners in Behavioral Health NC",
+    "Trillium Health Resources NC",
+    "Vaya Health",
+    "United Healthcare Community Plan of NC",
+    "WellCare of North Carolina",
+  ],
+  // Maps EMR funding source names → NCTracks Managing Entity patterns (partial match, case-insensitive)
+  PAYER_MAPPING: {
+    "Alliance Behavioral Health NC": "ALLIANCE HEALTH",
+    "Amerihealth Caritas North Carolina": "AMERIHEALTH CARITAS",
+    "Healthy Blue North Carolina": "HEALTHY BLUE",
+    "Partners in Behavioral Health NC": "PARTNERS BEHAVIORAL HEALTH",
+    "Trillium Health Resources NC": "TRILLIUM HEALTH",
+    "Vaya Health": "VAYA HEALTH",
+    "United Healthcare Community Plan of NC": "UNITEDHEALTHCARE",
+    "WellCare of North Carolina": "WELLCARE",
+  },
+
   // Output columns
   OUTPUT_COLUMNS: [
     "Medicaid ID", "Name", "Status", "DOB", "Gender", "County",

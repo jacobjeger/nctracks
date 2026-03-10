@@ -14,7 +14,8 @@
   "host_permissions": [
     "https://*.nctracks.nc.gov/*",
     "https://login.myncid.nc.gov/*",
-    "https://*.ncid.nc.gov/*"
+    "https://*.ncid.nc.gov/*",
+    "https://clinical.passagehealth.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -36,6 +37,11 @@
     {
       "matches": ["https://*.nctracks.nc.gov/*"],
       "js": ["config.js", "content-nctracks.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://clinical.passagehealth.com/*"],
+      "js": ["config.js", "content-passagehealth.js"],
       "run_at": "document_idle"
     }
   ],

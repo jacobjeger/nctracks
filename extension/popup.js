@@ -11,6 +11,11 @@
   const alertBanner = $("alertBanner");
   const alertText = $("alertText");
   const alertDismiss = $("alertDismiss");
+  // EMR credentials
+  const emrEmailInput = $("emrEmail");
+  const emrPasswordInput = $("emrPassword");
+  const saveEmrCredsCheckbox = $("saveEmrCreds");
+  // NCID credentials
   const usernameInput = $("username");
   const passwordInput = $("password");
   const togglePasswordBtn = $("togglePassword");
@@ -26,10 +31,15 @@
   const clearFileBtn = $("clearFileBtn");
   const templateBtn = $("templateBtn");
   const patientBadge = $("patientBadge");
+  const tabEmr = $("tabEmr");
   const tabFile = $("tabFile");
   const tabManual = $("tabManual");
+  const panelEmr = $("panelEmr");
   const panelFile = $("panelFile");
   const panelManual = $("panelManual");
+  const emrStatus = $("emrStatus");
+  const emrStatusText = $("emrStatusText");
+  const runBtnText = $("runBtnText");
   const manualIdsInput = $("manualIds");
   const parseManualBtn = $("parseManualBtn");
   const clearManualBtn = $("clearManualBtn");
@@ -58,6 +68,7 @@
 
   // Collapsible toggles
   const toggles = [
+    { btn: $("emrCredentialsToggle"), body: $("emrCredentialsBody") },
     { btn: $("credentialsToggle"), body: $("credentialsBody") },
     { btn: $("fileToggle"), body: $("fileBody") },
     { btn: $("settingsToggle"), body: $("settingsBody") },
@@ -69,6 +80,7 @@
   let currentResults = [];
   let logEntryCount = 0;
   let lastError = null;
+  let currentInputMode = "emr"; // "emr", "file", or "manual"
 
   // ─── Initialization ───
 
@@ -105,7 +117,7 @@
   // ─── Load Saved Data ───
 
   function loadSavedData() {
-    // Load credentials
+    // Load all credentials (NCID + EMR)
     chrome.runtime.sendMessage({ action: "loadCredentials" }, (response) => {
       if (chrome.runtime.lastError) {
         setConnectionStatus("error", "Disconnected");
@@ -115,7 +127,12 @@
         usernameInput.value = response.username;
         passwordInput.value = response.password;
       }
+      if (response && response.emrEmail) {
+        emrEmailInput.value = response.emrEmail;
+        emrPasswordInput.value = response.emrPassword;
+      }
       setConnectionStatus("ready", "Ready");
+      updateRunButton();
     });
 
     // Load config
@@ -190,6 +207,7 @@
   templateBtn.addEventListener("click", generateTemplate);
 
   // Input mode tabs
+  tabEmr.addEventListener("click", () => switchInputMode("emr"));
   tabFile.addEventListener("click", () => switchInputMode("file"));
   tabManual.addEventListener("click", () => switchInputMode("manual"));
 
@@ -224,6 +242,7 @@
     if (msg.type === "tabClosed") handleTabClosed();
     if (msg.type === "sessionExpired") handleSessionExpired();
     if (msg.type === "troubleshoot") showTroubleshooting(msg.issues);
+    if (msg.type === "emrProgress") handleEmrProgress(msg);
   });
 
   // ─── File Handling ───
@@ -405,20 +424,27 @@
 
   // ─── Input Mode Switching ───
 
-  let inputMode = "file"; // "file" or "manual"
+  // inputMode is now tracked by currentInputMode (declared above)
 
   function switchInputMode(mode) {
-    inputMode = mode;
+    currentInputMode = mode;
+    tabEmr.classList.toggle("active", mode === "emr");
     tabFile.classList.toggle("active", mode === "file");
     tabManual.classList.toggle("active", mode === "manual");
+    panelEmr.style.display = mode === "emr" ? "" : "none";
     panelFile.style.display = mode === "file" ? "" : "none";
     panelManual.style.display = mode === "manual" ? "" : "none";
+
+    // Update run button text
+    if (runBtnText) {
+      runBtnText.textContent = mode === "emr" ? "Pull from EMR & Verify" : "Run Verification";
+    }
 
     // Re-parse patients from the active mode
     if (mode === "manual") {
       parseManualIds();
     }
-    // If switching to file, patients stay as-is from last file load
+    updateRunButton();
   }
 
   function parseManualIds() {
@@ -462,6 +488,16 @@
   function validateBeforeRun() {
     const issues = [];
 
+    // EMR mode: validate EMR credentials
+    if (currentInputMode === "emr") {
+      if (!emrEmailInput.value.trim()) {
+        issues.push("Passage Health email is required");
+      }
+      if (!emrPasswordInput.value.trim()) {
+        issues.push("Passage Health password is required");
+      }
+    }
+
     if (!usernameInput.value.trim()) {
       issues.push("NCID Username is required");
       usernameInput.closest(".input-wrapper").querySelector("input").classList.add("input-error");
@@ -472,8 +508,8 @@
       passwordInput.closest(".input-wrapper").querySelector("input").classList.add("input-error");
     }
 
-    if (patients.length === 0) {
-      issues.push(inputMode === "manual" ? "No valid Medicaid IDs entered" : "No patient file loaded");
+    if (currentInputMode !== "emr" && patients.length === 0) {
+      issues.push(currentInputMode === "manual" ? "No valid Medicaid IDs entered" : "No patient file loaded");
     }
 
     if (!groupInput.value.trim()) {
@@ -498,14 +534,24 @@
   }
 
   function updateRunButton() {
-    const hasCredentials = usernameInput.value.trim() && passwordInput.value.trim();
-    const hasPatients = patients.length > 0;
-    runBtn.disabled = !hasCredentials || !hasPatients;
+    const hasNcidCreds = usernameInput.value.trim() && passwordInput.value.trim();
+
+    if (currentInputMode === "emr") {
+      // EMR mode: need both EMR and NCID credentials
+      const hasEmrCreds = emrEmailInput.value.trim() && emrPasswordInput.value.trim();
+      runBtn.disabled = !hasEmrCreds || !hasNcidCreds;
+    } else {
+      // File/Manual mode: need NCID credentials + patients
+      const hasPatients = patients.length > 0;
+      runBtn.disabled = !hasNcidCreds || !hasPatients;
+    }
   }
 
   // Listen for input changes to update button state
   usernameInput.addEventListener("input", updateRunButton);
   passwordInput.addEventListener("input", updateRunButton);
+  emrEmailInput.addEventListener("input", updateRunButton);
+  emrPasswordInput.addEventListener("input", updateRunButton);
 
   // ─── Actions ───
 
@@ -525,6 +571,14 @@
       });
     }
 
+    if (saveEmrCredsCheckbox.checked && emrEmailInput.value.trim()) {
+      chrome.runtime.sendMessage({
+        action: "saveEmrCredentials",
+        email: emrEmailInput.value,
+        password: emrPasswordInput.value,
+      });
+    }
+
     // Save config
     chrome.storage.local.set({
       savedGroup: groupInput.value,
@@ -541,6 +595,43 @@
     resultSummary.style.display = "none";
     downloadBar.style.display = "none";
 
+    const config = {
+      defaultGroup: groupInput.value,
+      defaultNpi: npiInput.value,
+      dosRangeDays: parseInt(dosRangeInput.value, 10) || 35,
+    };
+
+    // EMR mode: use startFromEMR action
+    if (currentInputMode === "emr") {
+      chrome.runtime.sendMessage(
+        {
+          action: "startFromEMR",
+          emrCredentials: {
+            email: emrEmailInput.value,
+            password: emrPasswordInput.value,
+          },
+          ncidCredentials: {
+            username: usernameInput.value,
+            password: passwordInput.value,
+          },
+          config: config,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            showAlert("error", "Could not connect to background: " + chrome.runtime.lastError.message);
+            setRunningState(false);
+            return;
+          }
+          if (response && !response.started) {
+            showAlert("error", response.error || "Failed to start");
+            setRunningState(false);
+          }
+        }
+      );
+      return;
+    }
+
+    // File/Manual mode: use existing startVerification action
     chrome.runtime.sendMessage(
       {
         action: "startVerification",
@@ -549,11 +640,7 @@
           username: usernameInput.value,
           password: passwordInput.value,
         },
-        config: {
-          defaultGroup: groupInput.value,
-          defaultNpi: npiInput.value,
-          dosRangeDays: parseInt(dosRangeInput.value, 10) || 35,
-        },
+        config: config,
       },
       (response) => {
         if (chrome.runtime.lastError) {
@@ -900,6 +987,26 @@
     showAlert("warning", "NCTracks session expired — re-logging in automatically...");
   }
 
+  function handleEmrProgress(msg) {
+    const phase = msg.phase || "";
+    const count = msg.patientsFound || 0;
+
+    if (phase === "navigating") {
+      progressPhase.textContent = "Navigating to EMR reports...";
+    } else if (phase === "filtering") {
+      progressPhase.textContent = "Applying EMR filters...";
+    } else if (phase === "scraping") {
+      progressPhase.textContent = `Scraping EMR page ${msg.page || ""}...`;
+      progressDetail.textContent = `${count} patients found so far`;
+    } else if (phase === "complete") {
+      progressPhase.textContent = `EMR scrape complete — ${count} patients found`;
+      progressDetail.textContent = "Proceeding to NCTracks verification...";
+    } else if (phase === "nctracks") {
+      progressPhase.textContent = "Logging into NCTracks...";
+      progressDetail.textContent = `${count} patients to verify`;
+    }
+  }
+
   // ─── Troubleshooting ───
 
   function diagnoseTroubleshooting(errorType, message) {
@@ -1082,8 +1189,9 @@
       const wb = XLSX.utils.book_new();
       const headers = [
         "Medicaid ID", "Name", "Status",
-        "Managing Entity (Current)", "Current Period",
-        "Managing Entity (Next)", "Next Period",
+        "EMR Funding Source",
+        "Managing Entity (Current)", "Current Period", "Payer Changed?",
+        "Managing Entity (Next)", "Next Period", "Payer Changed (Next)?",
         "Checked At", "Notes",
       ];
 
@@ -1091,8 +1199,9 @@
       for (const r of currentResults) {
         wsData.push([
           r.medicaid_id, r.name, r.status,
-          r.managing_entity || "", r.current_period || r.coverage_dates || "",
-          r.managing_entity_next || "", r.next_period || "",
+          r.emr_funding_source || "",
+          r.managing_entity || "", r.current_period || r.coverage_dates || "", r.payer_changed || "",
+          r.managing_entity_next || "", r.next_period || "", r.payer_changed_next || "",
           r.checked_at, r.notes || "",
         ]);
       }
@@ -1111,7 +1220,7 @@
         }
       }
 
-      // Style status cells with colors
+      // Style status cells with colors (column 2 = Status)
       for (let r = 1; r < wsData.length; r++) {
         const statusCell = ws[XLSX.utils.encode_cell({ r, c: 2 })];
         if (statusCell) {
@@ -1124,16 +1233,32 @@
             statusCell.s = { fill: { fgColor: { rgb: "FEF3C7" } }, font: { color: { rgb: "92400E" } } };
           }
         }
+
+        // Style "Payer Changed?" columns (6 and 9) — highlight YES in red
+        for (const pcCol of [6, 9]) {
+          const pcCell = ws[XLSX.utils.encode_cell({ r, c: pcCol })];
+          if (pcCell) {
+            const pcVal = (pcCell.v || "").toUpperCase();
+            if (pcVal === "YES") {
+              pcCell.s = { fill: { fgColor: { rgb: "FEE2E2" } }, font: { bold: true, color: { rgb: "991B1B" } } };
+            } else if (pcVal === "NO") {
+              pcCell.s = { fill: { fgColor: { rgb: "DCFCE7" } }, font: { color: { rgb: "166534" } } };
+            }
+          }
+        }
       }
 
       ws["!cols"] = [
         { wch: 14 },  // Medicaid ID
         { wch: 25 },  // Name
         { wch: 16 },  // Status
+        { wch: 32 },  // EMR Funding Source
         { wch: 35 },  // Managing Entity (Current)
         { wch: 28 },  // Current Period
+        { wch: 16 },  // Payer Changed?
         { wch: 35 },  // Managing Entity (Next)
         { wch: 28 },  // Next Period
+        { wch: 18 },  // Payer Changed (Next)?
         { wch: 22 },  // Checked At
         { wch: 50 },  // Notes
       ];
