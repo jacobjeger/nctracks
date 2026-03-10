@@ -355,57 +355,35 @@
     log("Looking for Status filter dropdown...");
     let statusApplied = false;
 
-    // The filter panel has labeled dropdowns. Each is a label + a custom select (div with up/down arrows).
-    // Find the Status label, then find the dropdown control near it.
-    let statusDropdown = await findAndClickFilterDropdown("Status");
-    if (statusDropdown) {
-      await delay(500);
-      // Look for "Active" option in the opened dropdown
-      const activeOption = findByText("li, div[role='option'], div[class*='option'], span, button, [class*='item']", /^active$/i);
-      if (activeOption) {
-        clickElement(activeOption);
-        statusApplied = true;
-        log("Status set to Active");
-        await delay(1000);
-      } else {
-        log("Could not find 'Active' option in Status dropdown");
-        logDropdownOptions();
-      }
-    } else {
-      diagnostics.push("Status filter dropdown not found");
+    statusApplied = await selectMantineDropdownOption("Status", "Active");
+    if (!statusApplied) {
+      diagnostics.push("Status filter: could not select Active");
     }
+    await delay(1000);
 
     // ── Step 3: Funding Sources Filter ──
     log("Looking for Funding Sources filter dropdown...");
     let fundingApplied = false;
     const targetSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
 
-    let fundingDropdown = await findAndClickFilterDropdown("Funding sources");
-    if (!fundingDropdown) {
-      fundingDropdown = await findAndClickFilterDropdown("Funding");
-    }
+    // For a multi-select, we need to open the dropdown and select each source
+    const fundingTrigger = await findAndClickFilterDropdown("Funding sources");
+    if (!fundingTrigger) {
+      diagnostics.push("Funding Sources filter dropdown not found");
+    } else {
+      await delay(1000);
 
-    if (fundingDropdown) {
-      await delay(500);
-      logDropdownOptions();
+      // Log the Mantine dropdown portal content
+      logMantineDropdown();
 
       let selectedCount = 0;
       for (const sourceName of targetSources) {
-        // Try exact match
-        let option = findByText("li, div[role='option'], div[class*='option'], span, label, [class*='item']", new RegExp(`^\\s*${escapeRegex(sourceName)}\\s*$`, "i"));
-        // Try partial match
-        if (!option) {
-          option = findByText("li, div[role='option'], div[class*='option'], span, label, [class*='item']", new RegExp(escapeRegex(sourceName.substring(0, 15)), "i"));
-        }
+        const option = findMantineOption(sourceName);
         if (option) {
-          // Make sure we're not clicking a table cell or the label itself
-          const optText = (option.textContent || "").trim();
-          if (optText.length < 100) {
-            clickElement(option);
-            selectedCount++;
-            log(`Selected funding source: ${sourceName}`);
-            await delay(300);
-          }
+          clickElement(option);
+          selectedCount++;
+          log(`Selected funding source: "${sourceName}"`);
+          await delay(500);
         } else {
           log(`Could not find funding source option: "${sourceName}"`);
         }
@@ -416,12 +394,9 @@
         log(`Selected ${selectedCount}/${targetSources.length} funding sources`);
       }
 
-      // Close the dropdown
-      await delay(300);
-      document.body.click();
+      // Close the dropdown by pressing Escape or clicking outside
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await delay(500);
-    } else {
-      diagnostics.push("Funding Sources filter dropdown not found");
     }
 
     // ── Step 4: Wait for table to update ──
@@ -451,42 +426,56 @@
     };
   }
 
-  // Helper: find a filter panel dropdown by its label text, then click the dropdown trigger
+  // ─── Mantine UI Helpers ───
+  // Passage Health uses Mantine UI. Dropdowns render in portals at end of document.body.
+  // Options use classes like mantine-Combobox-option, and the dropdown container
+  // uses mantine-Combobox-dropdown or similar.
+
+  // Find a filter dropdown by label text and click it open
   async function findAndClickFilterDropdown(labelText) {
     log(`Looking for filter dropdown labeled "${labelText}"...`);
 
-    // Strategy 1: Find the label element, then find the clickable dropdown near it
+    // Find the label element in the filter panel
     const allTextEls = document.querySelectorAll("label, p, span, div");
     for (const el of allTextEls) {
-      const text = (el.textContent || "").trim();
-      // Match only the label itself (short text, matches pattern)
+      const text = (el.textContent || el.innerText || "").trim();
       if (text.length > 30 || !new RegExp(`^${escapeRegex(labelText)}$`, "i").test(text)) continue;
 
-      log(`Found label "${text}" (tag=${el.tagName}, class="${(el.className || "").substring(0, 40)}")`);
+      log(`Found label "${text}" (tag=${el.tagName}, class="${(el.className || "").substring(0, 60)}")`);
 
-      // The dropdown control should be a sibling or nearby child
+      // Look upward and sideways for the clickable trigger
       const parent = el.parentElement;
       if (!parent) continue;
 
-      // Look for a clickable dropdown trigger near this label
-      // Custom React selects often use a div with role="combobox" or a button
-      const candidates = parent.querySelectorAll("button, [role='combobox'], [role='listbox'], div[class*='select'], input, [class*='trigger'], [class*='dropdown']");
+      // Mantine uses buttons with class "mantine-*" as triggers
+      const candidates = parent.querySelectorAll(
+        "button, input, [role='combobox'], [class*='mantine-InputWrapper'], [class*='mantine-Input-input'], [class*='mantine-Select'], [class*='mantine-MultiSelect']"
+      );
+      log(`  Trigger candidates near label: ${candidates.length}`);
+      for (let i = 0; i < candidates.length; i++) {
+        const c = candidates[i];
+        log(`  Candidate ${i}: tag=${c.tagName} class="${(c.className || "").substring(0, 50)}" type="${c.type || ""}"`);
+      }
+
       if (candidates.length > 0) {
         const trigger = candidates[0];
-        log(`Found dropdown trigger near "${labelText}": tag=${trigger.tagName} class="${(trigger.className || "").substring(0, 40)}"`);
+        log(`Clicking dropdown trigger: tag=${trigger.tagName} class="${(trigger.className || "").substring(0, 50)}"`);
         clickElement(trigger);
         return trigger;
       }
 
-      // The label's parent might BE the dropdown container — look for a clickable child
-      const clickables = parent.querySelectorAll("svg, [class*='chevron'], [class*='arrow'], [class*='icon']");
-      if (clickables.length > 0) {
-        log(`Clicking parent of "${labelText}" label (has ${clickables.length} icon elements)`);
-        clickElement(parent);
-        return parent;
+      // Also try: the parent's parent (filter row container)
+      const grandparent = parent.parentElement;
+      if (grandparent) {
+        const gpCandidates = grandparent.querySelectorAll("button, input, [role='combobox']");
+        if (gpCandidates.length > 0) {
+          log(`Found trigger in grandparent: tag=${gpCandidates[0].tagName}`);
+          clickElement(gpCandidates[0]);
+          return gpCandidates[0];
+        }
       }
 
-      // Just click the parent container
+      // Just click the parent
       log(`Clicking parent container of "${labelText}" label`);
       clickElement(parent);
       return parent;
@@ -496,13 +485,125 @@
     return null;
   }
 
-  // Helper: log visible dropdown options
-  function logDropdownOptions() {
-    const options = document.querySelectorAll("li, div[role='option'], div[class*='option'], [role='listbox'] > *, [class*='menu'] > *");
-    log(`Visible dropdown options: ${options.length}`);
-    for (let i = 0; i < Math.min(options.length, 20); i++) {
-      const text = (options[i].textContent || "").trim().substring(0, 60);
-      log(`  Option ${i}: "${text}" tag=${options[i].tagName} class="${(options[i].className || "").substring(0, 30)}"`);
+  // Select an option from a Mantine dropdown (for single-select like Status)
+  async function selectMantineDropdownOption(labelText, optionText) {
+    const trigger = await findAndClickFilterDropdown(labelText);
+    if (!trigger) return false;
+
+    await delay(800);
+    logMantineDropdown();
+
+    const option = findMantineOption(optionText);
+    if (option) {
+      clickElement(option);
+      log(`Selected "${optionText}" in "${labelText}" dropdown`);
+      await delay(500);
+      return true;
+    }
+
+    // If option not found via text, try typing into the input (Mantine Combobox supports search)
+    const input = trigger.tagName === "INPUT" ? trigger : trigger.querySelector("input");
+    if (input) {
+      log(`Trying to type "${optionText}" into search input...`);
+      setInputValue(input, optionText);
+      await delay(500);
+      const searchOption = findMantineOption(optionText);
+      if (searchOption) {
+        clickElement(searchOption);
+        log(`Selected "${optionText}" via search`);
+        return true;
+      }
+    }
+
+    log(`Could not find option "${optionText}" in "${labelText}" dropdown`);
+    return false;
+  }
+
+  // Find a Mantine dropdown option by text (searches portals at end of body)
+  function findMantineOption(text) {
+    const regex = new RegExp(escapeRegex(text), "i");
+
+    // Mantine renders dropdowns in portals. Look for all possible option containers.
+    // Common selectors: [class*='mantine-Combobox-option'], [data-combobox-option],
+    // [role='option'], div[class*='option'] within a [class*='mantine-Combobox-dropdown']
+    const selectors = [
+      "[data-combobox-option]",
+      "[class*='mantine-Combobox-option']",
+      "[class*='mantine-ComboboxOption']",
+      "[role='option']",
+      "[class*='mantine-Combobox-dropdown'] *",
+      "[class*='mantine-Popover'] li",
+      "[class*='mantine-ScrollArea'] li",
+    ];
+
+    for (const selector of selectors) {
+      const elements = document.querySelectorAll(selector);
+      for (const el of elements) {
+        // Check multiple text sources: textContent, innerText, value, aria-label, data-value
+        const elText = (el.textContent || el.innerText || "").trim();
+        const ariaLabel = (el.getAttribute("aria-label") || "").trim();
+        const dataValue = (el.getAttribute("data-value") || el.getAttribute("value") || "").trim();
+
+        if (regex.test(elText) || regex.test(ariaLabel) || regex.test(dataValue)) {
+          log(`Found Mantine option: text="${elText.substring(0, 50)}" aria="${ariaLabel}" data-value="${dataValue}" selector="${selector}"`);
+          return el;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  // Log everything in visible Mantine dropdown portals
+  function logMantineDropdown() {
+    log("Scanning for Mantine dropdown content...");
+
+    // Check for dropdown portals
+    const portalSelectors = [
+      "[class*='mantine-Combobox-dropdown']",
+      "[class*='mantine-Popover-dropdown']",
+      "[class*='mantine-Portal']",
+      "[data-portal]",
+      "[data-mantine-portal]",
+    ];
+
+    for (const sel of portalSelectors) {
+      const portals = document.querySelectorAll(sel);
+      if (portals.length > 0) {
+        log(`  Found ${portals.length} elements matching "${sel}"`);
+        for (let p = 0; p < portals.length; p++) {
+          const portal = portals[p];
+          const html = (portal.innerHTML || "").substring(0, 500);
+          const text = (portal.innerText || portal.textContent || "").substring(0, 300);
+          log(`  Portal ${p}: class="${(portal.className || "").substring(0, 60)}" text="${text}" html="${html.replace(/\s+/g, " ").substring(0, 200)}"`);
+
+          // Log child options
+          const options = portal.querySelectorAll("[data-combobox-option], [role='option'], li, [class*='option']");
+          log(`  Portal ${p} has ${options.length} option-like children`);
+          for (let i = 0; i < Math.min(options.length, 15); i++) {
+            const opt = options[i];
+            const optText = (opt.textContent || opt.innerText || "").trim();
+            const optValue = opt.getAttribute("data-value") || opt.getAttribute("value") || "";
+            const optClass = (opt.className || "").substring(0, 50);
+            log(`    Option ${i}: text="${optText.substring(0, 50)}" value="${optValue}" class="${optClass}" tag=${opt.tagName}`);
+          }
+        }
+      }
+    }
+
+    // Also check for any role="listbox" containers
+    const listboxes = document.querySelectorAll("[role='listbox']");
+    if (listboxes.length > 0) {
+      log(`  Found ${listboxes.length} listbox elements`);
+      for (let i = 0; i < listboxes.length; i++) {
+        const lb = listboxes[i];
+        const options = lb.querySelectorAll("[role='option'], li, [data-combobox-option]");
+        log(`  Listbox ${i}: ${options.length} options, class="${(lb.className || "").substring(0, 50)}"`);
+        for (let j = 0; j < Math.min(options.length, 15); j++) {
+          const opt = options[j];
+          log(`    Option ${j}: text="${(opt.textContent || "").trim().substring(0, 50)}" value="${opt.getAttribute("data-value") || ""}" tag=${opt.tagName}`);
+        }
+      }
     }
   }
 
