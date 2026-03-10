@@ -248,7 +248,9 @@
     if (msg.type === "log") appendLog(msg.message);
     if (msg.type === "progress") updateProgress(msg);
     if (msg.type === "complete") handleComplete(msg.results);
-    if (msg.type === "mfaRequired") handleMfaRequired();
+    if (msg.type === "mfaRequired") handleMfaRequired(msg);
+    if (msg.type === "mfaCompleted") handleMfaCompleted(msg);
+    if (msg.type === "mfaAutoFilled") handleMfaAutoFilled();
     if (msg.type === "captchaRequired") handleCaptchaRequired();
     if (msg.type === "error") handleError(msg);
     if (msg.type === "tabClosed") handleTabClosed();
@@ -970,9 +972,41 @@
     }
   }
 
-  function handleMfaRequired() {
+  let mfaCountdownInterval = null;
+
+  function handleMfaRequired(msg) {
     setConnectionStatus("warning", "MFA Required");
-    showAlert("warning", "MFA required — complete verification in the browser tab, then return here.");
+    const patientInfo = msg && msg.interruptedPatient ? ` Paused at ${msg.interruptedPatient}.` : "";
+    showAlert("warning", `MFA Required — please enter your code in the NCTracks tab. Automation is paused.${patientInfo}`);
+    // Show a spinner/countdown in the progress section
+    progressSection.style.display = "";
+    progressPhase.textContent = "Waiting for MFA...";
+    progressBar.style.width = "100%";
+    progressBar.classList.add("animated");
+    // Start a countdown timer showing elapsed time
+    const mfaStart = Date.now();
+    clearInterval(mfaCountdownInterval);
+    mfaCountdownInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - mfaStart) / 1000);
+      const mins = Math.floor(elapsed / 60);
+      const secs = elapsed % 60;
+      progressDetail.textContent = `Waiting for MFA... ${mins}:${String(secs).padStart(2, "0")} elapsed`;
+    }, 1000);
+  }
+
+  function handleMfaCompleted(msg) {
+    clearInterval(mfaCountdownInterval);
+    setConnectionStatus("processing", "Resuming");
+    const resumeInfo = msg && msg.resumeLabel ? msg.resumeLabel : "Resuming verification...";
+    showAlert("success", `Login successful. ${resumeInfo}`);
+    progressBar.classList.remove("animated");
+    // Alert auto-dismisses after 5s
+    setTimeout(() => hideAlert(), 5000);
+  }
+
+  function handleMfaAutoFilled() {
+    setConnectionStatus("processing", "MFA Auto-filled");
+    progressPhase.textContent = "MFA auto-filled, waiting for login...";
   }
 
   function handleCaptchaRequired() {
