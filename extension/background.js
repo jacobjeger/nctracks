@@ -620,16 +620,22 @@ async function processNextPatient() {
         // Step 2: Wait for the results page to load after Check Eligibility click
         // The click triggers a page navigation — wait for the new page
         await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
-        await delay(2000); // Extra time for content script to inject on new page
+        await delay(3000); // Wait for content script to inject on new page
 
         // Step 3: Scrape results from the new page
+        // The content script will poll for up to 30s waiting for result content
         let result;
         try {
           result = await sendToTab(state.tabId, { action: "scrapeResults" });
         } catch (scrapeErr) {
-          // If scrape fails, try once more after a short wait
-          await delay(3000);
-          result = await sendToTab(state.tabId, { action: "scrapeResults" });
+          // Content script may not be ready yet — wait and retry
+          addLog("  Waiting for results page to load...");
+          await delay(5000);
+          try {
+            result = await sendToTab(state.tabId, { action: "scrapeResults" });
+          } catch (retryErr) {
+            result = { status: "ERROR", notes: "Could not scrape results: " + retryErr.message };
+          }
         }
 
         // Append fill diagnostics to result notes

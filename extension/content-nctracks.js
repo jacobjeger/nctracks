@@ -719,13 +719,36 @@
     }
 
     if (msg.action === "scrapeResults") {
-      try {
+      // Wait for meaningful content to appear on the results page
+      // NCTracks may render content dynamically after the page "loads"
+      (async () => {
+        try {
+          // Poll until the page has real content (more than just a shell)
+          await waitFor(() => {
+            const text = (document.body.innerText || "").toUpperCase();
+            const bodyLen = text.length;
+            // Wait for at least some substantial content
+            if (bodyLen < 50) return false;
+            // Check for any result indicators
+            return text.includes("ELIGIBLE") ||
+              text.includes("NOT FOUND") ||
+              text.includes("NO RECORDS") ||
+              text.includes("INVALID") ||
+              text.includes("ACTIVE") ||
+              text.includes("TERMINATED") ||
+              text.includes("INACTIVE") ||
+              text.includes("PENDING") ||
+              text.includes("COVERAGE") ||
+              text.includes("ERROR") ||
+              text.includes("RECIPIENT") ||
+              text.includes("VERIFY");
+          }, 30000, 1000);
+        } catch {
+          // Timeout — scrape whatever is there
+        }
         const result = scrapeResults();
         sendResponse(result);
-      } catch (err) {
-        logError("scrapeResults handler", err);
-        sendResponse({ status: "ERROR", notes: "Scrape error: " + err.message });
-      }
+      })();
       return true;
     }
 
