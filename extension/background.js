@@ -371,74 +371,68 @@ function delay(ms) {
 async function startLogin() {
   try {
     state.status = "logging_in";
+    state.pendingPassword = state.credentials.password;
     saveState();
     sendProgress();
     addLog("Navigating to NCTracks login...");
 
     await ensureTab();
 
-    // Navigate and wait for the URL to actually change from about:blank
+    // Navigate to the login page — the content script will auto-inject
+    // on the NCID page and send ncidPageReady, which triggers credential filling
     chrome.tabs.update(state.tabId, { url: PROVIDER_PORTAL_LOGIN });
+    addLog("Waiting for login page...");
 
-    // Wait for the tab to leave about:blank and start loading the real page
-    addLog("Waiting for login page to load...");
+    // Wait for the page to reach NCID or NCTracks
+    let finalUrl = "";
     try {
-      await waitForTabUrl(
+      finalUrl = await waitForTabUrl(
         state.tabId,
         (url) => url.includes("ncid.nc.gov") || url.includes("nctracks.nc.gov"),
         TAB_LOAD_TIMEOUT_MS
       );
+      addLog("Redirected to: " + finalUrl);
     } catch {
-      // URL test timed out — check what URL we actually landed on
       const tab = await chrome.tabs.get(state.tabId);
-      addLog(`Page loaded at: ${tab.url}`);
-      if ((tab.url || "") === "about:blank" || (tab.url || "").startsWith("chrome://")) {
+      finalUrl = tab.url || "";
+      addLog("URL after timeout: " + finalUrl);
+      if (finalUrl === "about:blank" || finalUrl.startsWith("chrome://")) {
         broadcastError("login_failed", "Login page failed to load. Check your internet connection.");
         return;
       }
-      // Might be on an intermediate redirect page — continue anyway
     }
 
-    // Now wait for the page to fully load
-    await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
-    await delay(2000); // Let redirects and JS settle
+    // Wait for page to finish loading
+    try {
+      await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+    } catch {
+      addLog("Page load timeout — continuing anyway");
+    }
 
-    // Check current URL
+    // Check if already logged in (landed on NCTracks, not login page)
     const tab = await chrome.tabs.get(state.tabId);
     const url = (tab.url || "").toLowerCase();
-    addLog(`Login page URL: ${tab.url}`);
-
-    if (!url.includes("ncid.nc.gov") && !url.includes("nctracks.nc.gov")) {
-      addLog(`Unexpected URL: ${tab.url}`);
-      broadcastError("login_failed", "Login page did not load correctly. Got unexpected URL.");
-      return;
-    }
-
-    // If we landed on NCTracks directly (already logged in)
-    if (url.includes("nctracks.nc.gov") && !url.includes("loginAction")) {
-      addLog("Already logged in — skipping login flow.");
+    if (url.includes("nctracks.nc.gov") && !url.includes("loginaction")) {
+      addLog("Already logged in — skipping login.");
       await navigateToEligibility();
       processNextPatient();
       return;
     }
 
-    addLog("Waiting for content script to be ready...");
-    state.pendingPassword = state.credentials.password;
+    // The content script should have already sent ncidPageReady by now,
+    // which triggers the ncidPageReady handler to send credentials.
+    // But as a safety net, also try sending directly after a delay.
+    await delay(2000);
 
-    // Give content script extra time to initialize after page load
-    await delay(3000);
-
-    // Try sending credentials with generous retries — content script
-    // may need several seconds to become responsive on slow pages
     try {
       await sendToTab(state.tabId, {
         action: "fillLogin",
         username: state.credentials.username,
         password: state.credentials.password,
-      }, 6); // more retries for initial login
-      addLog("Login credentials sent to page.");
+      }, 8);
+      addLog("Credentials sent to login page.");
     } catch (err) {
-      addLog("Error communicating with login page: " + err.message);
+      addLog("Failed to reach content script: " + err.message);
 
       if (state.loginRetryCount < 2) {
         state.loginRetryCount++;
@@ -448,7 +442,7 @@ async function startLogin() {
         return;
       }
 
-      broadcastError("login_failed", "Could not fill login form: " + err.message);
+      broadcastError("login_failed", "Could not communicate with login page: " + err.message);
     }
   } catch (err) {
     addLog("Login flow error: " + err.message);
@@ -783,7 +777,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.event === "contentScriptError") {
-    addLog("Content script error: " + (msg.error || "unknown"));
+    addLog("Content script: " + (msg.error || "unknown"));
+  }
+
+  if (msg.event === "contentScriptLog") {
+    addLog(msg.message || "");
   }
 
   // ── From popup ──

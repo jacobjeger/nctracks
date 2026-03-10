@@ -10,11 +10,11 @@
   function log(message) {
     try {
       chrome.runtime.sendMessage({
-        event: "contentScriptError",
-        error: `[NCID] ${message}`,
+        event: "contentScriptLog",
+        message: "[NCID] " + message,
       });
     } catch {
-      // can't report
+      console.log("[NCID]", message);
     }
   }
 
@@ -25,18 +25,6 @@
       try {
         const el = document.querySelector(sel);
         if (el) return el;
-      } catch {
-        // invalid selector, skip
-      }
-    }
-    return null;
-  }
-
-  function findVisibleElement(selectors) {
-    for (const sel of selectors) {
-      try {
-        const el = document.querySelector(sel);
-        if (el && isVisible(el)) return el;
       } catch {
         // invalid selector, skip
       }
@@ -60,18 +48,6 @@
       }
     }
     return null;
-  }
-
-  function isVisible(el) {
-    if (!el) return false;
-    try {
-      const style = window.getComputedStyle(el);
-      return style.display !== "none" &&
-        style.visibility !== "hidden" &&
-        style.opacity !== "0";
-    } catch {
-      return true; // if we can't check, assume visible
-    }
   }
 
   function fillInput(el, value) {
@@ -101,7 +77,7 @@
           const result = conditionFn();
           if (result) return resolve(result);
         } catch {
-          // condition threw, keep trying
+          // keep trying
         }
         if (Date.now() - start > timeoutMs) return reject(new Error("Timeout"));
         setTimeout(check, intervalMs);
@@ -112,16 +88,6 @@
 
   // ─── Page Detection ───
 
-  function getPageDiag() {
-    const inputs = document.querySelectorAll("input");
-    const inputInfo = [];
-    for (const inp of inputs) {
-      if (inp.type === "hidden") continue;
-      inputInfo.push(`${inp.type||"text"}[name=${inp.name||"?"},id=${inp.id||"?"}]`);
-    }
-    return inputInfo.join(", ");
-  }
-
   function findUsernameField() {
     return findElement(CFG.USERNAME_SELECTORS);
   }
@@ -130,78 +96,61 @@
     return findElement(CFG.PASSWORD_SELECTORS);
   }
 
-  function isMfaPage() {
-    if (findUsernameField() || findPasswordField()) return false;
-    const pageText = (document.body.innerText || "").toUpperCase();
-    return pageText.includes("VERIFICATION CODE") ||
-      pageText.includes("MULTI-FACTOR") ||
-      pageText.includes("MFA") ||
-      pageText.includes("ONE-TIME") ||
-      pageText.includes("AUTHENTICAT") ||
-      pageText.includes("SECURITY CODE") ||
-      pageText.includes("VERIFY YOUR IDENTITY");
-  }
-
-  function isUsernameStep() {
-    return !!findUsernameField() && !findPasswordField();
-  }
-
-  function isPasswordStep() {
-    return !!findPasswordField();
-  }
-
   function detectPageType() {
-    if (isMfaPage()) return "mfa";
-    if (isPasswordStep()) return "password";
-    if (isUsernameStep()) return "username";
+    const u = findUsernameField();
+    const p = findPasswordField();
+    if (u && !p) return "username";
+    if (p) return "password";
+    const text = (document.body.innerText || "").toUpperCase();
+    if (text.includes("VERIFICATION CODE") || text.includes("MULTI-FACTOR") ||
+        text.includes("MFA") || text.includes("ONE-TIME") ||
+        text.includes("AUTHENTICAT") || text.includes("SECURITY CODE") ||
+        text.includes("VERIFY YOUR IDENTITY")) {
+      return "mfa";
+    }
     return "unknown";
   }
 
   function isErrorPage() {
-    const pageText = (document.body.innerText || "").toUpperCase();
-    return pageText.includes("INVALID USERNAME") ||
-      pageText.includes("INVALID PASSWORD") ||
-      pageText.includes("ACCOUNT LOCKED") ||
-      pageText.includes("ACCOUNT DISABLED") ||
-      pageText.includes("AUTHENTICATION FAILED") ||
-      pageText.includes("LOGIN FAILED") ||
-      pageText.includes("ACCESS DENIED") ||
-      pageText.includes("INCORRECT PASSWORD");
+    const t = (document.body.innerText || "").toUpperCase();
+    return t.includes("INVALID USERNAME") || t.includes("INVALID PASSWORD") ||
+      t.includes("ACCOUNT LOCKED") || t.includes("ACCOUNT DISABLED") ||
+      t.includes("AUTHENTICATION FAILED") || t.includes("LOGIN FAILED") ||
+      t.includes("ACCESS DENIED") || t.includes("INCORRECT PASSWORD");
   }
 
   function getLoginErrorMessage() {
-    const pageText = (document.body.innerText || "").toUpperCase();
-    if (pageText.includes("ACCOUNT LOCKED")) return "Account is locked. Please unlock at the NCID portal.";
-    if (pageText.includes("ACCOUNT DISABLED")) return "Account is disabled. Contact NCID support.";
-    if (pageText.includes("INVALID USERNAME")) return "Invalid username. Check your NCID username.";
-    if (pageText.includes("INVALID PASSWORD") || pageText.includes("INCORRECT PASSWORD")) return "Incorrect password.";
-    if (pageText.includes("AUTHENTICATION FAILED") || pageText.includes("LOGIN FAILED")) return "Authentication failed.";
-    if (pageText.includes("ACCESS DENIED")) return "Access denied.";
+    const t = (document.body.innerText || "").toUpperCase();
+    if (t.includes("ACCOUNT LOCKED")) return "Account is locked.";
+    if (t.includes("ACCOUNT DISABLED")) return "Account is disabled.";
+    if (t.includes("INVALID USERNAME")) return "Invalid username.";
+    if (t.includes("INVALID PASSWORD") || t.includes("INCORRECT PASSWORD")) return "Incorrect password.";
+    if (t.includes("AUTHENTICATION FAILED") || t.includes("LOGIN FAILED")) return "Authentication failed.";
+    if (t.includes("ACCESS DENIED")) return "Access denied.";
 
     const errorEls = document.querySelectorAll('.ping-error, .error-message, .alert-danger, [role="alert"]');
     for (const el of errorEls) {
       const text = el.textContent.trim();
       if (text.length > 5 && text.length < 200) return text;
     }
-
     return "Login failed — check credentials.";
   }
 
-  // ─── Error Reporting ───
-
-  function reportError(message) {
-    try {
-      chrome.runtime.sendMessage({ event: "loginError", error: message });
-    } catch {
-      // extension context invalidated
+  function getPageDiag() {
+    const inputs = document.querySelectorAll("input");
+    const info = [];
+    for (const inp of inputs) {
+      if (inp.type === "hidden") continue;
+      info.push(`${inp.type||"text"}[name=${inp.name||"?"},id=${inp.id||"?"}]`);
     }
+    return info.join(", ");
   }
 
   // ─── Message Listener ───
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === "fillLogin") {
-      log("Received fillLogin, page type: " + detectPageType() + ", inputs: " + getPageDiag());
+      log("Received fillLogin command");
       handleLogin(msg.username, msg.password);
       sendResponse({ received: true });
     }
@@ -210,7 +159,6 @@
         alive: true,
         url: window.location.href,
         pageType: detectPageType(),
-        inputs: getPageDiag(),
       });
     }
     return true;
@@ -220,17 +168,17 @@
 
   async function handleLogin(username, password) {
     try {
-      // Brief settle
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 300));
 
-      // Check for error messages first (from a previous failed attempt)
       if (isErrorPage()) {
-        reportError(getLoginErrorMessage());
+        chrome.runtime.sendMessage({ event: "loginError", error: getLoginErrorMessage() });
         return;
       }
 
-      // Detect MFA
-      if (isMfaPage()) {
+      const pageType = detectPageType();
+      log("handleLogin pageType=" + pageType + " inputs=" + getPageDiag());
+
+      if (pageType === "mfa") {
         log("MFA page detected");
         chrome.runtime.sendMessage({ event: "mfaRequired" });
         try {
@@ -239,64 +187,53 @@
             return !url.includes("myncid.nc.gov") && !url.includes("ncid.nc.gov");
           }, CFG.MFA_TIMEOUT_MS, 2000);
           chrome.runtime.sendMessage({ event: "loginComplete" });
-        } catch {
-          // MFA timeout handled by background alarm
-        }
+        } catch { /* timeout */ }
         return;
       }
 
-      // Username step
-      const usernameField = findUsernameField();
-      const passwordField = findPasswordField();
+      // ── Username step ──
+      if (pageType === "username") {
+        const field = findUsernameField();
+        log("Filling username into " + (field ? field.name || field.id || "input" : "NULL"));
+        fillInput(field, username);
+        await new Promise((r) => setTimeout(r, 400));
 
-      log(`Fields found: username=${!!usernameField}, password=${!!passwordField}`);
-
-      if (usernameField && !passwordField) {
-        log("Filling username...");
-        fillInput(usernameField, username);
-        await new Promise((r) => setTimeout(r, 500));
-
-        // Verify
-        if (usernameField.value !== username) {
-          log("Username value mismatch, retrying fill...");
-          fillInput(usernameField, username);
+        if (field.value !== username) {
+          log("Retry fill username");
+          fillInput(field, username);
           await new Promise((r) => setTimeout(r, 300));
         }
-
-        log("Username filled: " + (usernameField.value ? "yes" : "EMPTY"));
+        log("Username value set: " + (field.value ? "YES" : "EMPTY"));
 
         // Click Next
         const nextBtn = findButtonWithText(CFG.NEXT_BUTTON_SELECTORS, "Next");
         if (nextBtn) {
-          log("Clicking Next button");
+          log("Clicking Next");
           nextBtn.click();
         } else {
-          log("Next button not found, trying form submit or Enter key");
-          const form = usernameField.closest("form");
+          log("No Next button found, submitting form");
+          const form = field.closest("form");
           if (form) {
             form.submit();
           } else {
-            usernameField.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-            usernameField.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", bubbles: true }));
-            usernameField.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+            field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+            field.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
           }
         }
 
-        chrome.runtime.sendMessage({
-          event: "usernameSubmitted",
-          password: password,
-        });
+        chrome.runtime.sendMessage({ event: "usernameSubmitted", password });
 
-        // NCID is often an SPA — wait for password field to appear
-        log("Waiting for password field...");
+        // Wait for password field (SPA transition)
+        log("Waiting for password field to appear...");
         try {
           await waitFor(() => findPasswordField(), 15000, 500);
           await new Promise((r) => setTimeout(r, 500));
-          log("Password field appeared");
-          // Fall through to password step below
+          log("Password field appeared — continuing to password step");
+          // Fall through to password step
         } catch {
-          if (isMfaPage()) {
-            log("MFA detected after username");
+          const newType = detectPageType();
+          log("Password field did not appear. Current page type: " + newType);
+          if (newType === "mfa") {
             chrome.runtime.sendMessage({ event: "mfaRequired" });
             try {
               await waitFor(() => {
@@ -304,63 +241,58 @@
                 return !url.includes("myncid.nc.gov") && !url.includes("ncid.nc.gov");
               }, CFG.MFA_TIMEOUT_MS, 2000);
               chrome.runtime.sendMessage({ event: "loginComplete" });
-            } catch {
-              // timeout
-            }
-            return;
+            } catch { /* timeout */ }
+          } else if (isErrorPage()) {
+            chrome.runtime.sendMessage({ event: "loginError", error: getLoginErrorMessage() });
+          } else {
+            log("Page may have fully reloaded — content script will re-inject");
           }
-          if (isErrorPage()) {
-            reportError(getLoginErrorMessage());
-            return;
-          }
-          log("Password field did not appear — page may have reloaded");
           return;
         }
       }
 
-      // Password step (reached directly or after username step above)
+      // ── Password step ──
       const pwField = findPasswordField();
       if (pwField) {
-        log("Filling password...");
+        log("Filling password into " + (pwField.name || pwField.id || "input"));
         fillInput(pwField, password);
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 400));
 
         if (pwField.value !== password) {
-          log("Password value mismatch, retrying fill...");
+          log("Retry fill password");
           fillInput(pwField, password);
           await new Promise((r) => setTimeout(r, 300));
         }
-
-        log("Password filled: " + (pwField.value ? "yes" : "EMPTY"));
+        log("Password value set: " + (pwField.value ? "YES" : "EMPTY"));
 
         // Click Sign On
         const signOnBtn = findButtonWithText(CFG.SIGN_ON_SELECTORS, ["Sign On", "Sign In", "Log In", "Submit"]);
         if (signOnBtn) {
-          log("Clicking Sign On button");
+          log("Clicking Sign On");
           signOnBtn.click();
         } else {
-          log("Sign On button not found, trying form submit or Enter key");
+          log("No Sign On button, submitting form");
           const form = pwField.closest("form");
           if (form) {
             form.submit();
           } else {
             pwField.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-            pwField.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", bubbles: true }));
             pwField.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
           }
         }
 
         chrome.runtime.sendMessage({ event: "passwordSubmitted" });
 
-        // Wait and check for errors
         await new Promise((r) => setTimeout(r, 3000));
+
         if (isErrorPage()) {
-          reportError(getLoginErrorMessage());
+          chrome.runtime.sendMessage({ event: "loginError", error: getLoginErrorMessage() });
           return;
         }
 
-        if (isMfaPage()) {
-          log("MFA detected after password");
+        const postType = detectPageType();
+        if (postType === "mfa") {
+          log("MFA after password submit");
           chrome.runtime.sendMessage({ event: "mfaRequired" });
           try {
             await waitFor(() => {
@@ -368,13 +300,11 @@
               return !url.includes("myncid.nc.gov") && !url.includes("ncid.nc.gov");
             }, CFG.MFA_TIMEOUT_MS, 2000);
             chrome.runtime.sendMessage({ event: "loginComplete" });
-          } catch {
-            // timeout
-          }
+          } catch { /* timeout */ }
           return;
         }
 
-        // Check if login succeeded (redirected away)
+        // Wait for redirect away from NCID
         try {
           await waitFor(() => {
             const url = window.location.href.toLowerCase();
@@ -383,23 +313,23 @@
           chrome.runtime.sendMessage({ event: "loginComplete" });
         } catch {
           if (isErrorPage()) {
-            reportError(getLoginErrorMessage());
-          } else if (isMfaPage()) {
-            chrome.runtime.sendMessage({ event: "mfaRequired" });
+            chrome.runtime.sendMessage({ event: "loginError", error: getLoginErrorMessage() });
           } else {
-            reportError("Login did not complete — still on NCID page after submitting credentials.");
+            chrome.runtime.sendMessage({ event: "loginError", error: "Still on NCID after submitting." });
           }
         }
         return;
       }
 
-      // Unknown state
-      const diag = getPageDiag();
-      const bodySnippet = (document.body.innerText || "").substring(0, 100);
-      reportError(`Could not detect login step. Inputs: [${diag}]. Page: "${bodySnippet}..."`);
+      // Unknown
+      log("Unknown page state. Inputs: " + getPageDiag());
+      chrome.runtime.sendMessage({
+        event: "loginError",
+        error: "Could not find login fields. Page type: " + detectPageType(),
+      });
     } catch (err) {
       log("handleLogin error: " + err.message);
-      reportError("Login handler error: " + err.message);
+      chrome.runtime.sendMessage({ event: "loginError", error: "Error: " + err.message });
     }
   }
 
@@ -412,15 +342,18 @@
         setTimeout(connectKeepalive, 1000);
       });
     } catch {
-      // Extension context may be invalidated
+      // Extension context invalidated
     }
   }
   connectKeepalive();
 
-  // ─── Page Ready Notification ───
+  // ─── Auto-request credentials on page load ───
+  // When the content script loads on an NCID page, tell the background
+  // so it can send credentials if a login is in progress.
 
   const pageType = detectPageType();
-  log("Page ready: " + pageType + ", URL: " + window.location.href + ", inputs: " + getPageDiag());
+  log("Loaded on NCID page. Type: " + pageType + " URL: " + window.location.href);
+  log("Visible inputs: " + getPageDiag());
 
   try {
     chrome.runtime.sendMessage({
