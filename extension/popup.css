@@ -407,6 +407,83 @@ input[type="number"]:focus {
   font-weight: 400;
 }
 
+/* === Input Tabs === */
+.input-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--gray-100);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  margin-bottom: 10px;
+}
+
+.input-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-500);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.input-tab:hover {
+  color: var(--gray-700);
+}
+.input-tab.active {
+  background: white;
+  color: var(--gray-800);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+
+.input-panel {
+  animation: expandBody 0.15s ease;
+}
+
+/* === Manual Entry === */
+.manual-ids-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: "SF Mono", "Consolas", "Monaco", "Menlo", monospace;
+  color: var(--gray-800);
+  background: white;
+  outline: none;
+  resize: vertical;
+  min-height: 80px;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.manual-ids-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+.manual-ids-input::placeholder {
+  color: var(--gray-400);
+  font-family: inherit;
+}
+
+.manual-hint {
+  font-size: 11px;
+  color: var(--gray-400);
+  margin-top: 4px;
+}
+
+.manual-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
 /* === File Drop Zone === */
 .file-drop-zone {
   border: 2px dashed var(--gray-300);

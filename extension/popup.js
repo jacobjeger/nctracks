@@ -26,6 +26,13 @@
   const clearFileBtn = $("clearFileBtn");
   const templateBtn = $("templateBtn");
   const patientBadge = $("patientBadge");
+  const tabFile = $("tabFile");
+  const tabManual = $("tabManual");
+  const panelFile = $("panelFile");
+  const panelManual = $("panelManual");
+  const manualIdsInput = $("manualIds");
+  const parseManualBtn = $("parseManualBtn");
+  const clearManualBtn = $("clearManualBtn");
   const groupInput = $("groupId");
   const npiInput = $("npiId");
   const dosRangeInput = $("dosRange");
@@ -181,6 +188,23 @@
   });
 
   templateBtn.addEventListener("click", generateTemplate);
+
+  // Input mode tabs
+  tabFile.addEventListener("click", () => switchInputMode("file"));
+  tabManual.addEventListener("click", () => switchInputMode("manual"));
+
+  // Manual entry
+  parseManualBtn.addEventListener("click", parseManualIds);
+  clearManualBtn.addEventListener("click", () => {
+    manualIdsInput.value = "";
+    patients = [];
+    patientBadge.style.display = "none";
+    updateRunButton();
+  });
+  manualIdsInput.addEventListener("input", () => {
+    // Live-parse as user types
+    parseManualIds();
+  });
 
   // Action buttons
   runBtn.addEventListener("click", startVerification);
@@ -345,6 +369,59 @@
     reader.readAsArrayBuffer(file);
   }
 
+  // ─── Input Mode Switching ───
+
+  let inputMode = "file"; // "file" or "manual"
+
+  function switchInputMode(mode) {
+    inputMode = mode;
+    tabFile.classList.toggle("active", mode === "file");
+    tabManual.classList.toggle("active", mode === "manual");
+    panelFile.style.display = mode === "file" ? "" : "none";
+    panelManual.style.display = mode === "manual" ? "" : "none";
+
+    // Re-parse patients from the active mode
+    if (mode === "manual") {
+      parseManualIds();
+    }
+    // If switching to file, patients stay as-is from last file load
+  }
+
+  function parseManualIds() {
+    const raw = manualIdsInput.value.trim();
+    if (!raw) {
+      patients = [];
+      patientBadge.style.display = "none";
+      updateRunButton();
+      return;
+    }
+
+    // Split by newlines, commas, semicolons, or whitespace
+    const ids = raw
+      .split(/[\n,;\s]+/)
+      .map((id) => id.trim().replace(/\D/g, ""))
+      .filter((id) => id.length >= 7);
+
+    // Deduplicate
+    const unique = [...new Set(ids)];
+
+    patients = unique.map((id) => ({
+      medicaid_id: id,
+      first_name: "",
+      last_name: "",
+      dob: "",
+    }));
+
+    if (patients.length > 0) {
+      patientBadge.textContent = patients.length;
+      patientBadge.style.display = "inline";
+    } else {
+      patientBadge.style.display = "none";
+    }
+
+    updateRunButton();
+  }
+
   // ─── Validation ───
 
   function validateBeforeRun() {
@@ -361,7 +438,7 @@
     }
 
     if (patients.length === 0) {
-      issues.push("No patient file loaded");
+      issues.push(inputMode === "manual" ? "No valid Medicaid IDs entered" : "No patient file loaded");
     }
 
     if (!groupInput.value.trim()) {
@@ -543,6 +620,8 @@
 
     testLoginBtn.disabled = running;
     browseBtn.disabled = running;
+    manualIdsInput.disabled = running;
+    parseManualBtn.disabled = running;
     usernameInput.disabled = running;
     passwordInput.disabled = running;
     groupInput.disabled = running;

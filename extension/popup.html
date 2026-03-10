@@ -79,47 +79,84 @@
     </div>
   </section>
 
-  <!-- Patient File Section -->
+  <!-- Patient Input Section -->
   <section class="card">
     <button class="card-header" id="fileToggle" aria-expanded="true">
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
       </svg>
-      <span class="card-title">Patient File</span>
+      <span class="card-title">Patients</span>
       <span class="badge" id="patientBadge" style="display:none">0</span>
       <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <polyline points="6 9 12 15 18 9"/>
       </svg>
     </button>
     <div class="card-body" id="fileBody">
-      <div class="file-drop-zone" id="fileDropZone">
-        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-        </svg>
-        <p class="drop-text">Drop Excel file here or <button class="btn-text" id="browseBtn" type="button">browse</button></p>
-        <p class="drop-hint">.xlsx, .xls, or .csv files accepted</p>
-      </div>
-      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none">
-
-      <div class="file-info" id="fileInfo" style="display:none">
-        <div class="file-info-row">
-          <svg class="file-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <!-- Input mode tabs -->
+      <div class="input-tabs">
+        <button class="input-tab active" id="tabFile" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
           </svg>
-          <span class="file-name" id="fileName"></span>
-          <button class="btn-icon" id="clearFileBtn" title="Remove file">&times;</button>
-        </div>
-        <div class="file-stats" id="fileStats"></div>
-        <div class="file-validation" id="fileValidation" style="display:none"></div>
+          File Upload
+        </button>
+        <button class="input-tab" id="tabManual" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13">
+            <polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/>
+          </svg>
+          Manual Entry
+        </button>
       </div>
 
-      <div class="file-actions">
-        <button class="btn btn-ghost btn-sm" id="templateBtn" type="button">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+      <!-- File upload panel -->
+      <div class="input-panel" id="panelFile">
+        <div class="file-drop-zone" id="fileDropZone">
+          <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
-          Download Template
-        </button>
+          <p class="drop-text">Drop Excel file here or <button class="btn-text" id="browseBtn" type="button">browse</button></p>
+          <p class="drop-hint">.xlsx, .xls, or .csv files accepted</p>
+        </div>
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none">
+
+        <div class="file-info" id="fileInfo" style="display:none">
+          <div class="file-info-row">
+            <svg class="file-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>
+            </svg>
+            <span class="file-name" id="fileName"></span>
+            <button class="btn-icon" id="clearFileBtn" title="Remove file">&times;</button>
+          </div>
+          <div class="file-stats" id="fileStats"></div>
+          <div class="file-validation" id="fileValidation" style="display:none"></div>
+        </div>
+
+        <div class="file-actions">
+          <button class="btn btn-ghost btn-sm" id="templateBtn" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Download Template
+          </button>
+        </div>
+      </div>
+
+      <!-- Manual entry panel -->
+      <div class="input-panel" id="panelManual" style="display:none">
+        <div class="form-group">
+          <label for="manualIds">Medicaid IDs</label>
+          <textarea id="manualIds" class="manual-ids-input" rows="5" placeholder="Enter Medicaid IDs, one per line&#10;&#10;1234567890&#10;0987654321&#10;5678901234" spellcheck="false"></textarea>
+          <div class="manual-hint">One ID per line, or separated by commas</div>
+        </div>
+        <div class="manual-actions">
+          <button class="btn btn-ghost btn-sm" id="parseManualBtn" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+            </svg>
+            Load IDs
+          </button>
+          <button class="btn-text" id="clearManualBtn" type="button">Clear</button>
+        </div>
       </div>
     </div>
   </section>
