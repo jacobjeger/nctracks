@@ -386,13 +386,14 @@
       const elements = discoverFormElements();
       logFormDiscovery(elements);
 
-      // Click Clear to reset form (try config selectors first, then discover)
-      let clearBtn = findElement(CFG.CLEAR_SELECTORS);
-      if (!clearBtn) clearBtn = findButtonByLabel(elements, ["^clear$"]);
-      if (clearBtn) {
-        clearBtn.click();
-        await delay(1000);
-      }
+      // Clear form fields programmatically instead of clicking the Clear link
+      // (the Clear link is an <a href> that reloads the page, killing the content script)
+      elements.inputs.forEach((inp) => {
+        if (inp.type === "text" && inp.el.value) {
+          inp.el.value = "";
+          inp.el.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
 
       // ── Step 1: Account Information (first dropdown — cascades to Group) ──
       let accountSelect = findElement(CFG.ACCOUNT_SELECTORS);
