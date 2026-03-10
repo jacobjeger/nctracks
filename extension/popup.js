@@ -723,6 +723,20 @@
 
   // ─── Log ───
 
+  const copyLogBtn = $("copyLogBtn");
+  if (copyLogBtn) {
+    copyLogBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const lines = logOutput.querySelectorAll(".log-line");
+      const text = Array.from(lines).map((l) => l.textContent).join("\n");
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(() => {
+        copyLogBtn.textContent = "Copied!";
+        setTimeout(() => { copyLogBtn.textContent = "Copy Log"; }, 1500);
+      });
+    });
+  }
+
   function clearLog() {
     logOutput.innerHTML = "";
     logEntryCount = 0;
