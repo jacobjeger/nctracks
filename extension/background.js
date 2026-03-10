@@ -158,6 +158,52 @@ function showNotification(title, message, options = {}) {
   }
 }
 
+// ─── Name Validation ───
+
+const NAME_LABEL_NOISE = [
+  "last name:", "first name:", "date of birth:", "name:", "dob:",
+  "recipient name:", "recipient id:", "gender:", "admin county code:",
+  "primary care provider:", "daytime phone:", "address:",
+  "tailored care manager:", "tribal member:",
+];
+
+/**
+ * Clean a scraped name by removing label text contamination,
+ * and flag names that look truncated (no spaces / obvious concatenation).
+ * Returns { name, nameWarning }.
+ */
+function validateScrapedName(rawName, fallback) {
+  let name = (rawName || fallback || "").trim();
+
+  // Strip any label fragments that leaked into the scraped value
+  const lower = name.toLowerCase();
+  for (const label of NAME_LABEL_NOISE) {
+    const idx = lower.indexOf(label);
+    if (idx !== -1) {
+      name = (name.slice(0, idx) + name.slice(idx + label.length)).trim();
+    }
+  }
+  // Collapse multiple spaces left over from stripping
+  name = name.replace(/\s{2,}/g, " ").trim();
+
+  // Flag names that look truncated or concatenated
+  let nameWarning = "";
+  if (name.length > 0) {
+    const hasSpace = /\s/.test(name);
+    // A single-word name longer than 10 chars is likely two names glued together
+    if (!hasSpace && name.length > 10) {
+      nameWarning = "Name may be truncated — verify manually";
+    }
+    // Even shorter single-word names are suspicious if they look like two names
+    // e.g. all-caps with an obvious boundary (lowercase→uppercase rarely happens in NCTracks)
+    if (!hasSpace && name.length > 5 && /[a-z][A-Z]/.test(name)) {
+      nameWarning = "Name may be truncated — verify manually";
+    }
+  }
+
+  return { name, nameWarning };
+}
+
 // ─── Progress ───
 
 function sendProgress() {
@@ -1135,9 +1181,13 @@ async function processNextPatient() {
           addLog("  No coverage data — classified as NOT FOUND");
         }
 
+        // Validate scraped name — strip label contamination, flag truncation
+        const validated = validateScrapedName(result.recipient_name, patientName);
+        const resultNotes = [result.notes, validated.nameWarning].filter(Boolean).join("; ");
+
         state.results.push({
           medicaid_id: patient.medicaid_id,
-          name: result.recipient_name || patientName,
+          name: validated.name,
           status: finalStatus,
           emr_funding_source: emrSource,
           managing_entity: currentEntity || "(none)",
@@ -1147,10 +1197,11 @@ async function processNextPatient() {
           payer_changed: payerChangedEmr,
           payer_changed_next: payerChangedNext,
           checked_at: new Date().toISOString(),
-          notes: result.notes || "",
+          notes: resultNotes,
         });
 
-        addLog(`  Result: ${finalStatus} — ${result.recipient_name || ""} | Entity: ${currentEntity || "(none)"} | Next: ${nextEntity || "(none)"}${payerChangedNext === "YES" ? " | PayerChanged: YES" : ""}`);
+        if (validated.nameWarning) addLog(`  ⚠ ${validated.nameWarning}: "${validated.name}"`);
+        addLog(`  Result: ${finalStatus} — ${validated.name || ""} | Entity: ${currentEntity || "(none)"} | Next: ${nextEntity || "(none)"}${payerChangedNext === "YES" ? " | PayerChanged: YES" : ""}`);
         succeeded = true;
         break;
       } catch (err) {
