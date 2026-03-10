@@ -302,20 +302,42 @@
       }
     }
 
-    // Strategy 4: Look for an icon-only button with SVG (filter icon)
+    // Strategy 4: Find Mantine button with aria-haspopup="dialog" and filter-like SVG
+    // Passage Health uses Mantine UnstyledButton with a three-horizontal-lines SVG
+    // (path "M6 12h12M3 6h18M9 18h6") as the filter toggle. It has no text, no
+    // aria-label, and no "filter" keyword — only identifiable by SVG path pattern
+    // and aria-haspopup="dialog".
     if (!filterToggle) {
-      // Find icon-only buttons (short or no text content, has SVG)
-      const iconBtns = Array.from(allBtns).filter((b) => {
-        const text = (b.textContent || "").trim();
-        return text.length <= 2 && b.querySelector("svg");
-      });
-      log(`Found ${iconBtns.length} icon/short-text SVG buttons`);
+      const dialogBtns = document.querySelectorAll('button[aria-haspopup="dialog"]');
+      log(`Found ${dialogBtns.length} buttons with aria-haspopup="dialog"`);
+      for (const btn of dialogBtns) {
+        const svg = btn.querySelector("svg");
+        if (!svg) continue;
+        const pathData = Array.from(svg.querySelectorAll("path"))
+          .map((p) => p.getAttribute("d") || "").join(" ");
+        // Three horizontal lines pattern (filter icon): lines at y=6, y=12, y=18
+        // with decreasing widths (18→12→6 units wide)
+        if (/M\d+\s+6h\d+/.test(pathData) && /M\d+\s+12h\d+/.test(pathData) && /M\d+\s+18h\d+/.test(pathData)) {
+          filterToggle = btn;
+          log(`Found filter toggle by SVG three-lines path pattern (aria-haspopup="dialog")`);
+          break;
+        }
+        // Also match simpler horizontal line patterns (multiple h commands)
+        const hLines = (pathData.match(/h\d+/g) || []).length;
+        if (hLines >= 3 && !pathData.includes("v") && !pathData.includes("V") && !pathData.includes("C") && !pathData.includes("c")) {
+          filterToggle = btn;
+          log(`Found filter toggle by SVG horizontal-lines pattern (${hLines} h-lines)`);
+          break;
+        }
+      }
+    }
 
-      // The filter icon is typically a lines/slider icon — look for common patterns
-      for (const btn of iconBtns) {
+    // Strategy 5: Look for SVG-only buttons with filter/funnel SVG content keywords
+    if (!filterToggle) {
+      const svgBtns = Array.from(allBtns).filter((b) => b.querySelector("svg"));
+      for (const btn of svgBtns) {
         const svg = btn.querySelector("svg");
         const svgHtml = (svg.outerHTML || "").toLowerCase();
-        // Filter icons often have horizontal lines or "filter" in path data
         if (svgHtml.includes("filter") || svgHtml.includes("funnel") ||
             svgHtml.includes("sliders") || svgHtml.includes("adjustments") ||
             svgHtml.includes("tabler-icon-filter") || svgHtml.includes("icon-filter") ||
@@ -323,47 +345,6 @@
           filterToggle = btn;
           log("Found filter toggle by SVG content keyword");
           break;
-        }
-      }
-
-      // Also check SVG use/href references (Mantine often uses tabler icons)
-      if (!filterToggle) {
-        for (const btn of iconBtns) {
-          const uses = btn.querySelectorAll("use");
-          for (const u of uses) {
-            const href = u.getAttribute("href") || u.getAttribute("xlink:href") || "";
-            if (/filter|funnel|sliders|adjustments/i.test(href)) {
-              filterToggle = btn;
-              log(`Found filter toggle by SVG use href: "${href}"`);
-              break;
-            }
-          }
-          if (filterToggle) break;
-        }
-      }
-
-      // If still not found, try the icon buttons in the top-right area
-      if (!filterToggle && iconBtns.length >= 2) {
-        // Look at their position — filter buttons are usually near the top
-        const topBtns = iconBtns.filter((b) => {
-          const rect = b.getBoundingClientRect();
-          return rect.top < 250 && rect.right > window.innerWidth * 0.7;
-        });
-        log(`Icon buttons in top-right area: ${topBtns.length}`);
-        for (let i = 0; i < topBtns.length; i++) {
-          const rect = topBtns[i].getBoundingClientRect();
-          log(`  Top-right button ${i}: x=${Math.round(rect.x)} y=${Math.round(rect.y)} w=${Math.round(rect.width)} h=${Math.round(rect.height)}`);
-        }
-
-        if (topBtns.length >= 2) {
-          topBtns.sort((a, b) => a.getBoundingClientRect().x - b.getBoundingClientRect().x);
-          const middleIdx = Math.floor(topBtns.length / 2);
-          if (topBtns.length === 3) {
-            filterToggle = topBtns[1]; // Middle of 3
-          } else {
-            filterToggle = topBtns[middleIdx];
-          }
-          log(`Using middle top-right icon button as filter toggle (index ${middleIdx})`);
         }
       }
     }
