@@ -448,40 +448,18 @@
       await delay(500);
     }
 
-    // ── Step 4: Click Apply / Filter button (if present) ──
+    // ── Step 4: Click "Done" button to apply filters ──
     if (statusApplied || fundingApplied) {
-      log("Looking for Apply / Filter button...");
-      let applyBtn = null;
-
-      // Strategy 1: Button with "Apply", "Filter", or "Search" text
-      applyBtn = findByText("button", /^(apply|filter|search|submit|go)(\s+filters?)?$/i);
-
-      // Strategy 2: Button with relevant aria-label
-      if (!applyBtn) {
-        for (const btn of document.querySelectorAll("button")) {
-          const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
-          const title = (btn.getAttribute("title") || "").toLowerCase();
-          if (/apply|filter|search|submit/.test(ariaLabel) || /apply|filter|search|submit/.test(title)) {
-            applyBtn = btn;
-            break;
-          }
-        }
-      }
-
-      // Strategy 3: Submit button inside a form containing the filter inputs
-      if (!applyBtn) {
-        const filterForm = document.querySelector("form");
-        if (filterForm) {
-          applyBtn = filterForm.querySelector("button[type='submit'], input[type='submit']");
-        }
-      }
+      log("Looking for Done / Apply button...");
+      let applyBtn = findByText("button", /^done$/i);
+      if (!applyBtn) applyBtn = findByText("button", /^(apply|filter|search|submit|go)(\s+filters?)?$/i);
 
       if (applyBtn) {
-        log(`Found Apply button: "${(applyBtn.textContent || "").trim()}" — clicking...`);
+        log(`Found button: "${(applyBtn.textContent || "").trim()}" — clicking...`);
         clickElement(applyBtn);
         await delay(2000);
       } else {
-        log("No explicit Apply button found — filters may auto-apply on selection");
+        log("No Done/Apply button found — filters may auto-apply on selection");
       }
     }
 
