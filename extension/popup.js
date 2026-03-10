@@ -301,10 +301,9 @@
             continue;
           }
 
-          // Validate Medicaid ID format (should be numeric, 9-10 digits)
-          const cleanId = medicaidId.replace(/\D/g, "");
-          if (cleanId.length < 7 || cleanId.length > 12) {
-            warnings.push(`Row ${i + 2}: Medicaid ID "${medicaidId}" looks unusual (${cleanId.length} digits)`);
+          // Validate Medicaid ID format (9 digits + optional alpha suffix)
+          if (!/^\d{7,12}[A-Za-z]?$/.test(medicaidId)) {
+            warnings.push(`Row ${i + 2}: Medicaid ID "${medicaidId}" looks unusual (expected 9+ digits with optional letter suffix)`);
           }
 
           const dob = normalized["dob"] || normalized["date_of_birth"] || "";
@@ -397,10 +396,11 @@
     }
 
     // Split by newlines, commas, semicolons, or whitespace
+    // Keep trailing alpha character — NC Medicaid IDs are 9 digits + 1 letter
     const ids = raw
       .split(/[\n,;\s]+/)
-      .map((id) => id.trim().replace(/\D/g, ""))
-      .filter((id) => id.length >= 7);
+      .map((id) => id.trim())
+      .filter((id) => /^\d{7,12}[A-Za-z]?$/.test(id));
 
     // Deduplicate
     const unique = [...new Set(ids)];
