@@ -296,22 +296,68 @@
     let fundingApplied = false;
     const targetSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
 
-    // Look for the funding sources multi-select trigger
-    let fundingTrigger = findByText("button, [role='button'], div.select, div[class*='select'], label, div, span", /funding\s*source/i);
+    // Look for the funding sources multi-select trigger.
+    // IMPORTANT: The page has a table column header "FUNDING SOURCES" — we must NOT
+    // match that. Look for small, filter-specific elements first (buttons, labels,
+    // small divs). Avoid matching large container divs.
+    let fundingTrigger = null;
+
+    // Strategy 1: Buttons/labels with "Funding Source" text
+    fundingTrigger = findByText("button, [role='button'], label", /funding\s*source/i);
+
+    // Strategy 2: Small div/span elements (filter controls are typically compact)
+    if (!fundingTrigger) {
+      const candidates = document.querySelectorAll("div, span");
+      for (const el of candidates) {
+        const text = (el.textContent || "").trim();
+        if (/^funding\s*source/i.test(text) && text.length < 50) {
+          // Make sure it's a small filter element, not a big container
+          fundingTrigger = el;
+          log(`Found compact Funding Sources element: tag=${el.tagName} text="${text}" class="${el.className}"`);
+          break;
+        }
+      }
+    }
+
+    // Strategy 3: Look for filter controls near the Status filter (sibling elements)
+    if (!fundingTrigger) {
+      // The Status filter worked — look for similar elements nearby
+      const allFilterLike = document.querySelectorAll("div[class*='filter'], div[class*='select'], div[class*='dropdown'], div[class*='multi']");
+      for (const el of allFilterLike) {
+        const text = (el.textContent || "").trim().toLowerCase();
+        if (text.includes("funding") && text.length < 100) {
+          fundingTrigger = el;
+          log(`Found Funding Sources filter by class pattern: class="${el.className}"`);
+          break;
+        }
+      }
+    }
 
     if (fundingTrigger) {
-      log(`Found Funding Sources trigger: tag=${fundingTrigger.tagName} text="${(fundingTrigger.textContent || "").trim().substring(0, 50)}"`);
+      log(`Found Funding Sources trigger: tag=${fundingTrigger.tagName} text="${(fundingTrigger.textContent || "").trim().substring(0, 50)}" class="${(fundingTrigger.className || "").substring(0, 60)}"`);
       clickElement(fundingTrigger);
-      await delay(500);
+      await delay(1000);
+
+      // Log what appeared after clicking
+      const dropdownOptions = document.querySelectorAll("li, div[role='option'], div[class*='option'], [class*='menu-item'], [class*='checkbox']");
+      log(`After clicking trigger: ${dropdownOptions.length} potential options visible`);
+      for (let i = 0; i < Math.min(dropdownOptions.length, 15); i++) {
+        log(`  Option ${i}: "${(dropdownOptions[i].textContent || "").trim().substring(0, 60)}" tag=${dropdownOptions[i].tagName} class="${(dropdownOptions[i].className || "").substring(0, 40)}"`);
+      }
 
       let selectedCount = 0;
       for (const sourceName of targetSources) {
-        const option = findByText("li, div[role='option'], div[class*='option'], span, label", new RegExp(`^${escapeRegex(sourceName)}$`, "i"));
+        // Try exact match first, then partial/contains match
+        let option = findByText("li, div[role='option'], div[class*='option'], span, label, [class*='menu-item'], [class*='checkbox']", new RegExp(`^${escapeRegex(sourceName)}$`, "i"));
+        if (!option) {
+          // Try contains match for truncated names
+          option = findByText("li, div[role='option'], div[class*='option'], span, label, [class*='menu-item'], [class*='checkbox']", new RegExp(escapeRegex(sourceName.substring(0, 20)), "i"));
+        }
         if (option) {
           clickElement(option);
           selectedCount++;
           log(`Selected funding source: ${sourceName}`);
-          await delay(200);
+          await delay(300);
         } else {
           log(`Could not find funding source option: "${sourceName}"`);
         }
@@ -328,6 +374,16 @@
       await delay(300);
     } else {
       log("Could not find Funding Sources filter trigger");
+      // Log all small text elements for debugging
+      const smallDivs = document.querySelectorAll("div, span, label, button");
+      const filterLike = [];
+      for (const el of smallDivs) {
+        const text = (el.textContent || "").trim();
+        if (text.length > 0 && text.length < 30 && /fund|source|payer|filter/i.test(text)) {
+          filterLike.push(`${el.tagName}:"${text}" class="${(el.className || "").substring(0, 30)}"`);
+        }
+      }
+      log(`Filter-like elements: ${filterLike.join("; ") || "none found"}`);
       diagnostics.push("Funding Sources filter not found");
     }
 
@@ -472,20 +528,27 @@
           }
         }
 
-        // Extract the funding source name (strip out the Medicaid ID if embedded)
+        // Extract the funding source name (strip out Medicaid IDs and separators)
+        // EMR format: "Trillium Health Resources NC  • 954658053S" or multiple:
+        // "Healthy Blue North Carolina  • 955193280NTrillium Health Resources NC  • 956669255M"
         let emrFundingSource = fundingText;
         if (emrFundingSource) {
-          // Remove Medicaid ID from the funding source text to get just the payer name
+          // Remove Medicaid IDs
           emrFundingSource = emrFundingSource.replace(/\b\d{9,12}[A-Za-z]\b/g, "").trim();
-          // Remove common separators
-          emrFundingSource = emrFundingSource.replace(/[-–—]\s*$/, "").replace(/^\s*[-–—]/, "").trim();
-          // If there are multiple funding sources, try to find the matching one
-          if (emrFundingSource.includes(",") || emrFundingSource.includes(";") || emrFundingSource.includes("\n")) {
+          // Remove bullet separators and dashes, then clean up whitespace
+          emrFundingSource = emrFundingSource.replace(/[•·●]/g, "").replace(/[-–—]\s*$/, "").replace(/^\s*[-–—]/, "").trim();
+          // Clean up multiple spaces
+          emrFundingSource = emrFundingSource.replace(/\s{2,}/g, " ").trim();
+
+          // Split on remaining payer name boundaries — after cleanup, multiple sources
+          // become "Payer One  Payer Two" or similar. Try to match known sources.
+          const knownSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
+          const matchedSource = knownSources.find((fs) => emrFundingSource.toLowerCase().includes(fs.toLowerCase()));
+          if (matchedSource) {
+            emrFundingSource = matchedSource;
+          } else if (emrFundingSource.includes(",") || emrFundingSource.includes(";") || emrFundingSource.includes("\n")) {
             const parts = emrFundingSource.split(/[,;\n]+/).map((s) => s.trim()).filter(Boolean);
-            // Prefer a known funding source
-            const known = parts.find((p) => (CFG.PASSAGEHEALTH_FUNDING_SOURCES || []).some((fs) => p.toLowerCase().includes(fs.toLowerCase())));
-            if (known) emrFundingSource = known;
-            else emrFundingSource = parts[0]; // Use first one
+            emrFundingSource = parts[0];
           }
         }
 
