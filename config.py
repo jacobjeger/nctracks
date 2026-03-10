@@ -4,6 +4,12 @@
 NCTRACKS_HOME = "https://www.nctracks.nc.gov"
 PROVIDER_PORTAL_LOGIN = "https://www.nctracks.nc.gov/ncmmisPortal/loginAction?flow=PP"
 NCID_LOGIN_BASE = "https://login.myncid.nc.gov"
+ELIGIBILITY_INQUIRY_URL = "https://www.nctracks.nc.gov/DirectConnect/Eligibility/Inquiry"
+
+# Provider defaults for Verify Recipient form
+DEFAULT_GROUP = "144862:1396570"  # Group dropdown value
+DEFAULT_NPI = "1396570701"  # NPI / Atypical ID dropdown value
+DOS_RANGE_DAYS = 35  # Date of Service range: today + this many days
 
 # Timeouts (milliseconds)
 PAGE_LOAD_TIMEOUT = 60_000

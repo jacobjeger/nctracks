@@ -2,7 +2,7 @@
 
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable
 
 from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext, TimeoutError
@@ -302,88 +302,57 @@ class NCTracksAutomation:
             raise Exception(f"Unexpected URL after login: {self.page.url}")
 
     def navigate_to_eligibility(self):
-        """Navigate to the eligibility verification screen.
+        """Navigate to the Verify Recipient (eligibility) page.
 
-        The exact navigation path depends on the portal's menu structure.
-        Common paths:
-        - Recipient Eligibility Verification under a main menu
-        - Direct URL if known
+        The portal landing is at /ncmmisPortal/site/provider/scriptLanding.htm
+        The Verify Recipient page is at /DirectConnect/Eligibility/Inquiry
+        Navigation: click the "Eligibility" tab in the top nav bar.
         """
         self.on_status("Navigating to eligibility verification...")
 
-        # Try common navigation approaches
-        nav_attempts = [
-            # Approach 1: Click through menus
-            self._navigate_via_menu,
-            # Approach 2: Direct URL (if the portal uses predictable URLs)
-            self._navigate_via_url,
-            # Approach 3: Search the page for eligibility links
-            self._navigate_via_search,
-        ]
+        # Check if we're already on the eligibility page
+        if "Eligibility/Inquiry" in self.page.url:
+            self.on_status("Already on Verify Recipient page.")
+            return True
 
-        for attempt in nav_attempts:
+        # Approach 1: Direct URL (most reliable)
+        try:
+            eligibility_url = config.ELIGIBILITY_INQUIRY_URL
+            self.page.goto(eligibility_url, wait_until="domcontentloaded",
+                           timeout=config.PAGE_LOAD_TIMEOUT)
             try:
-                if attempt():
-                    self.on_status("On eligibility verification page.")
-                    return True
-            except Exception as e:
-                logger.debug(f"Navigation attempt failed: {e}")
-                continue
+                self.page.wait_for_load_state("networkidle", timeout=15000)
+            except TimeoutError:
+                pass
+
+            if "Eligibility/Inquiry" in self.page.url or "Verify Recipient" in self.page.inner_text("body"):
+                self.on_status("On Verify Recipient page.")
+                return True
+        except Exception as e:
+            logger.debug(f"Direct URL navigation failed: {e}")
+
+        # Approach 2: Click the Eligibility tab in the nav bar
+        try:
+            elig_tab = self.page.locator('a:has-text("Eligibility")').first
+            elig_tab.click(timeout=5000)
+            self.page.wait_for_load_state("networkidle", timeout=config.NAVIGATION_TIMEOUT)
+
+            # The Eligibility tab may open a submenu — look for "Verify Recipient"
+            verify_link = self.page.locator('a:has-text("Verify Recipient")')
+            if verify_link.count() > 0 and verify_link.first.is_visible(timeout=3000):
+                verify_link.first.click()
+                self.page.wait_for_load_state("networkidle", timeout=config.NAVIGATION_TIMEOUT)
+
+            if "Eligibility/Inquiry" in self.page.url or "Verify Recipient" in self.page.inner_text("body"):
+                self.on_status("On Verify Recipient page.")
+                return True
+        except Exception as e:
+            logger.debug(f"Menu navigation failed: {e}")
 
         self.on_status(
             "Could not auto-navigate to eligibility page. "
             "Please navigate manually in the browser, then click Continue."
         )
-        return False
-
-    def _navigate_via_menu(self) -> bool:
-        """Try to navigate through portal menus."""
-        # Common menu text patterns for eligibility
-        menu_texts = [
-            "Recipient",
-            "Eligibility",
-            "Verify Eligibility",
-            "Recipient Eligibility",
-            "Eligibility Verification",
-        ]
-
-        for text in menu_texts:
-            try:
-                link = self.page.locator(f'a:has-text("{text}")').first
-                if link.is_visible(timeout=3000):
-                    link.click()
-                    self.page.wait_for_load_state("networkidle", timeout=config.NAVIGATION_TIMEOUT)
-                    return True
-            except Exception:
-                continue
-        return False
-
-    def _navigate_via_url(self) -> bool:
-        """Try direct URLs for eligibility page."""
-        possible_urls = [
-            f"{config.NCTRACKS_HOME}/ncmmisPortal/eligibilityAction",
-            f"{config.NCTRACKS_HOME}/ncmmisPortal/recipientEligibility",
-        ]
-        for url in possible_urls:
-            try:
-                response = self.page.goto(url, timeout=config.NAVIGATION_TIMEOUT)
-                if response and response.ok:
-                    return True
-            except Exception:
-                continue
-        return False
-
-    def _navigate_via_search(self) -> bool:
-        """Search the page for any eligibility-related links."""
-        try:
-            links = self.page.locator('a[href*="ligib"]').all()
-            for link in links:
-                if link.is_visible():
-                    link.click()
-                    self.page.wait_for_load_state("networkidle", timeout=config.NAVIGATION_TIMEOUT)
-                    return True
-        except Exception:
-            pass
         return False
 
     def check_patient(self, patient: dict) -> dict:
@@ -461,70 +430,213 @@ class NCTracksAutomation:
 
         return result
 
-    def _fill_patient_search(self, patient: dict):
-        """Fill in the eligibility search form for a patient."""
-        # Try to find and fill Medicaid ID field
-        id_selectors = [
-            'input[name*="medicaidId"]',
-            'input[name*="recipientId"]',
-            'input[name*="memberId"]',
-            'input[id*="medicaidId"]',
-            'input[id*="recipientId"]',
-            'input[id*="memberId"]',
-            'input[id*="MedicaidId"]',
+    def _select_dropdowns(self):
+        """Select the correct Group and NPI/Atypical ID dropdowns.
+
+        These are required Base Information fields on the Verify Recipient page.
+        Values come from config (matching the provider account).
+        """
+        # Select Group dropdown
+        group_selectors = [
+            'select[name*="group" i]',
+            'select[id*="group" i]',
+            'select[name*="Group"]',
         ]
-        id_field = self._find_first_visible(id_selectors)
-        if id_field:
-            id_field.fill("")
-            id_field.fill(patient.get("medicaid_id", ""))
+        group_dropdown = self._find_first_visible(group_selectors)
+        if not group_dropdown:
+            group_dropdown = self._find_select_by_label("Group")
+        if group_dropdown:
+            try:
+                group_dropdown.select_option(value=config.DEFAULT_GROUP, timeout=5000)
+            except Exception:
+                # Try selecting by label text (partial match)
+                try:
+                    group_dropdown.select_option(label=config.DEFAULT_GROUP, timeout=5000)
+                except Exception:
+                    logger.warning(f"Could not select Group: {config.DEFAULT_GROUP}")
         else:
-            # Fall back to name-based search
-            self._fill_name_search(patient)
+            logger.warning("Could not find Group dropdown")
 
-    def _fill_name_search(self, patient: dict):
-        """Fill name and DOB fields as fallback search."""
-        first_selectors = [
-            'input[name*="firstName"]',
-            'input[id*="firstName"]',
-            'input[name*="first_name"]',
+        time.sleep(1)  # Allow page to update after group selection
+
+        # Select NPI / Atypical ID dropdown
+        npi_selectors = [
+            'select[name*="npi" i]',
+            'select[id*="npi" i]',
+            'select[name*="Npi"]',
+            'select[name*="atypical" i]',
+            'select[id*="atypical" i]',
         ]
-        last_selectors = [
-            'input[name*="lastName"]',
-            'input[id*="lastName"]',
-            'input[name*="last_name"]',
-        ]
-        dob_selectors = [
-            'input[name*="dob"]',
-            'input[name*="dateOfBirth"]',
-            'input[name*="birthDate"]',
-            'input[id*="dob"]',
-            'input[id*="dateOfBirth"]',
-        ]
+        npi_dropdown = self._find_first_visible(npi_selectors)
+        if not npi_dropdown:
+            npi_dropdown = self._find_select_by_label("NPI")
+        if npi_dropdown:
+            try:
+                npi_dropdown.select_option(value=config.DEFAULT_NPI, timeout=5000)
+            except Exception:
+                try:
+                    npi_dropdown.select_option(label=config.DEFAULT_NPI, timeout=5000)
+                except Exception:
+                    logger.warning(f"Could not select NPI: {config.DEFAULT_NPI}")
+        else:
+            logger.warning("Could not find NPI dropdown")
 
-        first_field = self._find_first_visible(first_selectors)
-        if first_field:
-            first_field.fill(patient.get("first_name", ""))
+        time.sleep(0.5)
 
-        last_field = self._find_first_visible(last_selectors)
-        if last_field:
-            last_field.fill(patient.get("last_name", ""))
+    def _find_select_by_label(self, label_text: str):
+        """Find a select element by its associated label text."""
+        try:
+            label = self.page.locator(f'label:has-text("{label_text}")').first
+            if label.is_visible(timeout=2000):
+                for_attr = label.get_attribute("for")
+                if for_attr:
+                    field = self.page.locator(f"select#{for_attr}")
+                    if field.count() > 0:
+                        return field.first
+        except Exception:
+            pass
+        try:
+            field = self.page.locator(
+                f'xpath=//*[contains(text(),"{label_text}")]//following::select[1]'
+            ).first
+            if field.is_visible(timeout=2000):
+                return field
+        except Exception:
+            pass
+        return None
 
-        dob_field = self._find_first_visible(dob_selectors)
-        if dob_field:
-            dob_field.fill(patient.get("dob", ""))
+    def _fill_patient_search(self, patient: dict):
+        """Fill in the Verify Recipient eligibility form.
+
+        Only required fields:
+        - Recipient ID (= Medicaid ID)
+        - Date of Service From (today) / To (today + 35 days)
+        - Group and NPI dropdowns (Base Information)
+        """
+        # First clear any previous search data
+        self._clear_form()
+
+        # Select Group and NPI dropdowns
+        self._select_dropdowns()
+
+        # Fill Recipient ID (Medicaid ID)
+        medicaid_id = patient.get("medicaid_id", "")
+        if not medicaid_id:
+            raise Exception("Medicaid ID (Recipient ID) is required")
+
+        recipient_field = self._find_field_by_label("Recipient ID")
+        if not recipient_field:
+            recipient_id_selectors = [
+                'input[name*="recipientId" i]',
+                'input[id*="recipientId" i]',
+                'input[name*="RecipientId"]',
+                'input[id*="RecipientId"]',
+            ]
+            recipient_field = self._find_first_visible(recipient_id_selectors)
+        if recipient_field:
+            recipient_field.click()
+            recipient_field.fill(medicaid_id)
+        else:
+            raise Exception("Could not find Recipient ID field on the page")
+
+        # Fill Date of Service From = today, To = today + 35 days
+        today = datetime.now()
+        dos_from = today.strftime("%m/%d/%Y")
+        dos_to = (today + timedelta(days=config.DOS_RANGE_DAYS)).strftime("%m/%d/%Y")
+
+        dos_from_field = self._find_field_by_label("Date of Service From")
+        if not dos_from_field:
+            dos_from_selectors = [
+                'input[name*="dateOfServiceFrom" i]',
+                'input[id*="dateOfServiceFrom" i]',
+                'input[name*="dosFrom" i]',
+                'input[name*="serviceFrom" i]',
+            ]
+            dos_from_field = self._find_first_visible(dos_from_selectors)
+        if dos_from_field:
+            dos_from_field.click()
+            dos_from_field.fill(dos_from)
+        else:
+            raise Exception("Could not find Date of Service From field")
+
+        dos_to_field = self._find_field_by_label("To")
+        if not dos_to_field:
+            dos_to_selectors = [
+                'input[name*="dateOfServiceTo" i]',
+                'input[id*="dateOfServiceTo" i]',
+                'input[name*="dosTo" i]',
+                'input[name*="serviceTo" i]',
+            ]
+            dos_to_field = self._find_first_visible(dos_to_selectors)
+        if dos_to_field:
+            dos_to_field.click()
+            dos_to_field.fill(dos_to)
+        else:
+            raise Exception("Could not find Date of Service To field")
+
+    def _clear_form(self):
+        """Click the Clear button to reset the form, or clear fields manually."""
+        try:
+            clear_btn = self.page.locator('input[value="Clear"], button:has-text("Clear")').first
+            if clear_btn.is_visible(timeout=2000):
+                clear_btn.click()
+                time.sleep(0.5)
+                return
+        except Exception:
+            pass
+        # Manual clear as fallback
+        for inp in self.page.locator('input[type="text"]:visible').all():
+            try:
+                inp.fill("")
+            except Exception:
+                pass
+
+    def _find_field_by_label(self, label_text: str):
+        """Find an input field by its associated label text."""
+        try:
+            # Try label element with for attribute
+            label = self.page.locator(f'label:has-text("{label_text}")').first
+            if label.is_visible(timeout=2000):
+                for_attr = label.get_attribute("for")
+                if for_attr:
+                    field = self.page.locator(f"#{for_attr}")
+                    if field.count() > 0:
+                        return field.first
+
+            # Try finding input next to/near label text using XPath
+            # Label text followed by an input
+            field = self.page.locator(
+                f'xpath=//td[contains(text(),"{label_text}")]/following-sibling::td//input'
+            ).first
+            if field.is_visible(timeout=2000):
+                return field
+        except Exception:
+            pass
+
+        try:
+            # Try text content near input
+            field = self.page.locator(
+                f'xpath=//*[contains(text(),"{label_text}")]//following::input[1]'
+            ).first
+            if field.is_visible(timeout=2000):
+                return field
+        except Exception:
+            pass
+
+        return None
 
     def _click_search(self):
-        """Click the search/submit button on the eligibility form."""
+        """Click the Check Eligibility button on the Verify Recipient form."""
         search_selectors = [
+            'input[value="Check Eligibility"]',
+            'button:has-text("Check Eligibility")',
+            'input[value*="Check Elig"]',
+            'input[type="submit"][value*="Eligib"]',
             'button:has-text("Search")',
-            'input[type="submit"][value*="Search"]',
-            'button:has-text("Verify")',
-            'button:has-text("Submit")',
             'input[type="submit"]',
             'button[type="submit"]',
-            'a:has-text("Search")',
         ]
-        self._click_first_match(search_selectors, "Search button")
+        self._click_first_match(search_selectors, "Check Eligibility button")
         self.page.wait_for_load_state("networkidle", timeout=config.NAVIGATION_TIMEOUT)
 
     def _scrape_result(self, result: dict):
