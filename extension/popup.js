@@ -50,6 +50,7 @@
   const dosRangeInput = $("dosRange");
   const runBtn = $("runBtn");
   const stopBtn = $("stopBtn");
+  const abortBtn = $("abortBtn");
   const progressSection = $("progressSection");
   const progressBar = $("progressBar");
   const progressPhase = $("progressPhase");
@@ -239,6 +240,7 @@
   // Action buttons
   runBtn.addEventListener("click", startVerification);
   stopBtn.addEventListener("click", stopVerification);
+  abortBtn.addEventListener("click", abortVerification);
   testLoginBtn.addEventListener("click", testLogin);
   downloadBtn.addEventListener("click", downloadResults);
   retryBtn.addEventListener("click", retryLastAction);
@@ -695,6 +697,19 @@
     setConnectionStatus("warning", "Stopping");
   }
 
+  function abortVerification() {
+    chrome.runtime.sendMessage({ action: "abortVerification" }, (response) => {
+      if (chrome.runtime.lastError) {
+        showAlert("error", "Failed to send abort signal.");
+        return;
+      }
+    });
+    abortBtn.disabled = true;
+    progressPhase.textContent = "Aborting...";
+    setConnectionStatus("error", "Aborted");
+    setRunningState(false);
+  }
+
   function testLogin() {
     const issues = [];
     if (!usernameInput.value.trim()) issues.push("Username is required");
@@ -762,9 +777,12 @@
       runBtn.style.display = "none";
       stopBtn.style.display = "";
       stopBtn.disabled = false;
+      abortBtn.style.display = "";
+      abortBtn.disabled = false;
     } else {
       runBtn.style.display = "";
       stopBtn.style.display = "none";
+      abortBtn.style.display = "none";
     }
 
     testLoginBtn.disabled = running;

@@ -1005,8 +1005,10 @@
         // Get status if available
         const statusText = getText(colIdx.status).toLowerCase();
 
-        // Skip non-active patients when status column is available
-        if (colIdx.status !== undefined && statusText && statusText !== "active") {
+        // Skip explicitly inactive/terminated clients
+        // "no dates" means no end date (= still active), so don't skip those
+        const inactiveStatuses = ["inactive", "terminated", "cancelled", "canceled", "expired", "closed"];
+        if (colIdx.status !== undefined && statusText && inactiveStatuses.includes(statusText)) {
           diagnostics.push(`Row ${r + 1}: ${fullName} — skipped (status="${statusText}")`);
           continue;
         }
@@ -1032,13 +1034,13 @@
       }
 
       if (patients.length > 0) {
-        log(`Scraped ${patients.length} patients from table ${t}`);
+        log(`Scraped ${patients.length} clients from table ${t}`);
         break; // Found the right table
       }
     }
 
     if (patients.length === 0) {
-      log("No patients found in any table");
+      log("No clients found in any table");
       if (diagnostics.length > 0) log(`Diagnostics: ${diagnostics.join("; ")}`);
     }
 

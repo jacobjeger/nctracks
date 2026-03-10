@@ -770,7 +770,7 @@ async function startFromEMR() {
       broadcastToPopup({ type: "emrProgress", phase: "scraping", page: pageNum, patientsFound: allPatients.length });
 
       const scrapeResult = await sendToTab(state.tabId, { action: "emrScrapePage" });
-      addLog(`Page ${pageNum}: ${scrapeResult.patients ? scrapeResult.patients.length : 0} patients found (status: ${scrapeResult.status})`);
+      addLog(`Page ${pageNum}: ${scrapeResult.patients ? scrapeResult.patients.length : 0} clients found (status: ${scrapeResult.status})`);
 
       if (scrapeResult.patients && scrapeResult.patients.length > 0) {
         allPatients = allPatients.concat(scrapeResult.patients);
@@ -812,13 +812,13 @@ async function startFromEMR() {
     });
     if (multiInsurance.length > 0) {
       const uniqueMulti = new Set(multiInsurance.map((p) => p.medicaid_id));
-      addLog(`${uniqueMulti.size} patients have multiple active insurances (${multiInsurance.length} total rows)`);
+      addLog(`${uniqueMulti.size} clients have multiple active insurances (${multiInsurance.length} total rows)`);
     }
 
     broadcastToPopup({ type: "emrProgress", phase: "complete", patientsFound: allPatients.length });
 
     if (allPatients.length === 0) {
-      broadcastError("emr_scrape_failed", "No patients found in EMR report. Check filters and report data.");
+      broadcastError("emr_scrape_failed", "No clients found in Funding Sources report. Check filters and report data.");
       return;
     }
 
@@ -830,7 +830,7 @@ async function startFromEMR() {
     saveState();
 
     addLog(`=== Phase: NCTracks Login ===`);
-    addLog(`Proceeding to verify ${state.totalPatients} patients on NCTracks...`);
+    addLog(`Proceeding to verify ${state.totalPatients} clients on NCTracks...`);
     broadcastToPopup({ type: "emrProgress", phase: "nctracks", patientsFound: allPatients.length });
     sendProgress();
 
@@ -1534,8 +1534,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.action === "stopVerification") {
     state.stopRequested = true;
-    addLog("Stop requested — will finish after current patient...");
+    addLog("Stop requested — will finish after current client...");
     sendResponse({ stopping: true });
+  }
+
+  if (msg.action === "abortVerification") {
+    addLog("ABORT — immediately stopping all processing.");
+    processingActive = false;
+    state.stopRequested = true;
+    state.status = "done";
+    stopKeepalive();
+    saveState();
+    sendProgress();
+    broadcastToPopup({ type: "complete", results: state.results, aborted: true });
+    showNotification("Verification Aborted", `Aborted after ${state.currentIndex} of ${state.totalPatients} clients.`);
+    sendResponse({ aborted: true });
   }
 
   if (msg.action === "getState") {
