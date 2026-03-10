@@ -1274,11 +1274,18 @@
 
       const wsData = [headers];
       for (const r of currentResults) {
+        const emrSource = r.emr_funding_source || "";
+        const entity = r.managing_entity || "";
+        const entityNext = r.managing_entity_next || "";
+        // If no insurance found anywhere, write "None" in insurance and changed columns
+        const noInsurance = (!emrSource || emrSource === "(none)") &&
+          (!entity || entity === "(none)") &&
+          (!entityNext || entityNext === "(none)");
         wsData.push([
           r.medicaid_id, r.name, r.status,
-          r.emr_funding_source || "", r.insurance_type || "",
-          r.managing_entity || "", r.current_period || r.coverage_dates || "", r.payer_changed || "",
-          r.managing_entity_next || "", r.next_period || "", r.payer_changed_next || "",
+          noInsurance ? "None" : emrSource, r.insurance_type || "",
+          noInsurance ? "None" : entity, r.current_period || r.coverage_dates || "", noInsurance ? "None" : (r.payer_changed || ""),
+          noInsurance ? "None" : entityNext, r.next_period || "", noInsurance ? "None" : (r.payer_changed_next || ""),
           r.checked_at, r.notes || "",
         ]);
       }
