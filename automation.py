@@ -92,15 +92,15 @@ class NCTracksAutomation:
         try:
             self.page.goto(
                 config.PROVIDER_PORTAL_LOGIN,
-                wait_until="networkidle",
+                wait_until="domcontentloaded",
                 timeout=config.PAGE_LOAD_TIMEOUT,
             )
         except TimeoutError:
-            # Page may still be usable even if networkidle times out
             logger.warning("Page load timeout, continuing anyway...")
 
-        # Wait for redirect to NCID login page
+        # Wait for all SAML redirects to complete and land on NCID login
         self.on_status("Waiting for NCID login page...")
+        self._wait_for_ncid_login_page()
         try:
             # The NCID login uses a two-step flow
             # Step 1: Enter username
@@ -128,11 +128,33 @@ class NCTracksAutomation:
             self.on_status(f"Login failed: {e}")
             return False
 
+    def _wait_for_ncid_login_page(self):
+        """Wait for SAML redirects to finish and NCID login page to be ready."""
+        # Wait until URL contains the NCID login domain
+        max_wait = 30
+        start = time.time()
+        while time.time() - start < max_wait:
+            url = self.page.url
+            if "login.myncid.nc.gov" in url or "ncid.nc.gov" in url:
+                break
+            time.sleep(1)
+        else:
+            logger.warning(f"Did not reach NCID login page. Current URL: {self.page.url}")
+
+        # Wait for the page to fully settle after redirect
+        try:
+            self.page.wait_for_load_state("networkidle", timeout=15000)
+        except TimeoutError:
+            pass
+        # Extra settling time — NCID pages have JS that enables fields after load
+        time.sleep(2)
+
     def _wait_and_fill_username(self):
         """Fill in username on NCID login page."""
         self.on_status("Entering username...")
 
-        # Try multiple possible selectors for the username field
+        # Use locators (auto-retry) instead of wait_for_selector (one-shot)
+        # Try each selector, using fill with timeout to handle late-enabling fields
         username_selectors = [
             'input[name="pf.username"]',
             'input[id="username"]',
@@ -141,29 +163,43 @@ class NCTracksAutomation:
             'input[type="text"]',
         ]
 
-        username_field = None
+        filled = False
         for selector in username_selectors:
             try:
-                username_field = self.page.wait_for_selector(
-                    selector, state="visible", timeout=config.ELEMENT_TIMEOUT
-                )
-                if username_field:
-                    break
-            except TimeoutError:
+                locator = self.page.locator(selector).first
+                locator.wait_for(state="visible", timeout=5000)
+                # Wait for the field to become editable
+                locator.click(timeout=5000)
+                locator.fill(self.username, timeout=10000)
+                filled = True
+                break
+            except Exception as e:
+                logger.debug(f"Username selector {selector} failed: {e}")
                 continue
 
-        if not username_field:
+        if not filled:
+            # Last resort: find any visible text input
+            self.on_status("Trying fallback username entry...")
+            inputs = self.page.locator('input[type="text"]:visible')
+            count = inputs.count()
+            if count > 0:
+                inputs.first.click(timeout=5000)
+                inputs.first.fill(self.username, timeout=10000)
+                filled = True
+
+        if not filled:
             raise Exception(
                 "Could not find username field. The login page may have changed. "
                 "Please check the browser window."
             )
 
-        username_field.fill(self.username)
+        time.sleep(0.5)
 
         # Click Next/Submit button
         next_selectors = [
             'a.ping-button:has-text("Next")',
             'button:has-text("Next")',
+            'a:has-text("Next")',
             'input[type="submit"]',
             'button[type="submit"]',
             '.btn-primary',
@@ -173,7 +209,13 @@ class NCTracksAutomation:
     def _wait_and_fill_password(self):
         """Fill in password after username step."""
         self.on_status("Entering password...")
-        time.sleep(1)  # Brief pause for page transition
+
+        # Wait for page transition after clicking Next
+        try:
+            self.page.wait_for_load_state("networkidle", timeout=10000)
+        except TimeoutError:
+            pass
+        time.sleep(2)  # NCID needs time to render the password step
 
         password_selectors = [
             'input[name="pf.pass"]',
@@ -182,28 +224,31 @@ class NCTracksAutomation:
             'input[type="password"]',
         ]
 
-        password_field = None
+        filled = False
         for selector in password_selectors:
             try:
-                password_field = self.page.wait_for_selector(
-                    selector, state="visible", timeout=config.ELEMENT_TIMEOUT
-                )
-                if password_field:
-                    break
-            except TimeoutError:
+                locator = self.page.locator(selector).first
+                locator.wait_for(state="visible", timeout=10000)
+                locator.click(timeout=5000)
+                locator.fill(self.password, timeout=10000)
+                filled = True
+                break
+            except Exception as e:
+                logger.debug(f"Password selector {selector} failed: {e}")
                 continue
 
-        if not password_field:
+        if not filled:
             raise Exception(
                 "Could not find password field. The login page may have changed."
             )
 
-        password_field.fill(self.password)
+        time.sleep(0.5)
 
         # Click Sign On / Login button
         login_selectors = [
             'a.ping-button:has-text("Sign On")',
             'button:has-text("Sign On")',
+            'a:has-text("Sign On")',
             'button:has-text("Sign In")',
             'button:has-text("Log In")',
             'input[type="submit"]',
