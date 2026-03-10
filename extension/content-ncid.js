@@ -154,6 +154,11 @@
       handleLogin(msg.username, msg.password);
       sendResponse({ received: true });
     }
+    if (msg.action === "fillMfa") {
+      log("Received fillMfa command — auto-filling TOTP code");
+      handleMfaAutoFill(msg.code);
+      sendResponse({ received: true });
+    }
     if (msg.action === "ping") {
       sendResponse({
         alive: true,
@@ -330,6 +335,79 @@
     } catch (err) {
       log("handleLogin error: " + err.message);
       chrome.runtime.sendMessage({ event: "loginError", error: "Error: " + err.message });
+    }
+  }
+
+  // ─── MFA Auto-fill Handler ───
+
+  async function handleMfaAutoFill(code) {
+    try {
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Find the MFA input field
+      const mfaInput = findElement(CFG.MFA_INPUT_SELECTORS);
+      if (!mfaInput) {
+        // Fallback: try to find any visible text/number input that's likely the OTP field
+        const allInputs = document.querySelectorAll('input:not([type="hidden"])');
+        let candidate = null;
+        for (const inp of allInputs) {
+          const t = (inp.type || "text").toLowerCase();
+          if (t === "text" || t === "tel" || t === "number") {
+            // Skip username/password fields
+            const name = (inp.name || "").toLowerCase();
+            const id = (inp.id || "").toLowerCase();
+            if (name.includes("user") || name.includes("pass") || id.includes("user") || id.includes("pass")) continue;
+            candidate = inp;
+            break;
+          }
+        }
+        if (!candidate) {
+          log("Could not find MFA input field. Inputs: " + getPageDiag());
+          chrome.runtime.sendMessage({ event: "mfaAutoFillFailed", reason: "No MFA input found" });
+          return;
+        }
+        log("Using fallback MFA input: " + (candidate.name || candidate.id || "unknown"));
+        fillInput(candidate, code);
+      } else {
+        log("Found MFA input: " + (mfaInput.name || mfaInput.id || "unknown"));
+        fillInput(mfaInput, code);
+      }
+
+      await new Promise((r) => setTimeout(r, 300));
+
+      // Click the verify/submit button
+      const submitBtn = findButtonWithText(CFG.MFA_SUBMIT_SELECTORS, ["Verify", "Submit", "Continue", "Confirm", "Sign On"]);
+      if (submitBtn) {
+        log("Clicking MFA submit button");
+        submitBtn.click();
+      } else {
+        // Try submitting the form
+        const filledInput = findElement(CFG.MFA_INPUT_SELECTORS) || document.activeElement;
+        const form = filledInput?.closest("form");
+        if (form) {
+          log("Submitting MFA form");
+          form.submit();
+        } else {
+          log("No MFA submit button or form found — pressing Enter");
+          filledInput?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+          filledInput?.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+        }
+      }
+
+      // Wait for redirect away from NCID (same as manual MFA)
+      try {
+        await waitFor(() => {
+          const url = window.location.href.toLowerCase();
+          return !url.includes("myncid.nc.gov") && !url.includes("ncid.nc.gov");
+        }, CFG.MFA_TIMEOUT_MS, 2000);
+        chrome.runtime.sendMessage({ event: "loginComplete" });
+      } catch {
+        log("MFA auto-fill did not redirect. May need manual verification.");
+        chrome.runtime.sendMessage({ event: "mfaAutoFillFailed", reason: "No redirect after MFA submit" });
+      }
+    } catch (err) {
+      log("MFA auto-fill error: " + err.message);
+      chrome.runtime.sendMessage({ event: "mfaAutoFillFailed", reason: err.message });
     }
   }
 

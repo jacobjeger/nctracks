@@ -19,6 +19,8 @@
   const usernameInput = $("username");
   const passwordInput = $("password");
   const togglePasswordBtn = $("togglePassword");
+  const totpSecretInput = $("totpSecret");
+  const toggleTotpBtn = $("toggleTotp");
   const saveCredsCheckbox = $("saveCreds");
   const testLoginBtn = $("testLoginBtn");
   const fileDropZone = $("fileDropZone");
@@ -127,6 +129,9 @@
         usernameInput.value = response.username;
         passwordInput.value = response.password;
       }
+      if (response && response.totpSecret) {
+        totpSecretInput.value = response.totpSecret;
+      }
       if (response && response.emrEmail) {
         emrEmailInput.value = response.emrEmail;
         emrPasswordInput.value = response.emrPassword;
@@ -160,6 +165,13 @@
     passwordInput.type = isPassword ? "text" : "password";
     passwordInput.classList.toggle("password-visible", isPassword);
     togglePasswordBtn.title = isPassword ? "Hide password" : "Show password";
+  });
+
+  // TOTP secret toggle
+  toggleTotpBtn.addEventListener("click", () => {
+    const isPassword = totpSecretInput.type === "password";
+    totpSecretInput.type = isPassword ? "text" : "password";
+    toggleTotpBtn.title = isPassword ? "Hide secret" : "Show secret";
   });
 
   // Alert dismiss
@@ -569,6 +581,13 @@
         username: usernameInput.value,
         password: passwordInput.value,
       });
+      // Save TOTP secret if provided
+      if (totpSecretInput.value.trim()) {
+        chrome.runtime.sendMessage({
+          action: "saveTotpSecret",
+          secret: totpSecretInput.value.trim(),
+        });
+      }
     }
 
     if (saveEmrCredsCheckbox.checked && emrEmailInput.value.trim()) {
@@ -690,6 +709,12 @@
         username: usernameInput.value,
         password: passwordInput.value,
       });
+      if (totpSecretInput.value.trim()) {
+        chrome.runtime.sendMessage({
+          action: "saveTotpSecret",
+          secret: totpSecretInput.value.trim(),
+        });
+      }
     }
 
     setRunningState(true);

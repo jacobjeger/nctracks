@@ -47,6 +47,28 @@ const NCTRACKS_CONFIG = {
     'button[type="submit"]',
   ],
 
+  // MFA / OTP input selectors (PingFederate NCID MFA page)
+  MFA_INPUT_SELECTORS: [
+    'input[name="otp"]',
+    'input[name="pf.challengeResponse"]',
+    'input[name*="otp" i]',
+    'input[name*="code" i]',
+    'input[name*="verification" i]',
+    'input[name*="token" i]',
+    'input[id*="otp" i]',
+    'input[id*="code" i]',
+    'input[type="tel"]',
+    'input[type="number"][maxlength="6"]',
+    'input[inputmode="numeric"]',
+    'input[autocomplete="one-time-code"]',
+  ],
+  MFA_SUBMIT_SELECTORS: [
+    'a.ping-button',  // filter by text "Verify/Submit" in code
+    'button',         // filter by text "Verify/Submit" in code
+    'input[type="submit"]',
+    'button[type="submit"]',
+  ],
+
   // Eligibility form selectors — based on actual NCTracks "Verify Recipient" page
   // The page uses table-based layout with labels in preceding <td> cells.
   // Element IDs may be dynamic (JSF-style), so we use multiple fallback strategies.

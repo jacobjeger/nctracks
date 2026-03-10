@@ -18,6 +18,52 @@ const MESSAGE_MAX_RETRIES = 4;
 const MFA_TIMEOUT_MS = 300000; // 5 minutes
 const KEEPALIVE_INTERVAL_MINUTES = 0.4; // 24 seconds
 
+// ─── TOTP Generator (RFC 6238) ───
+// Pure JS implementation — no dependencies. Generates 6-digit TOTP codes
+// from a base32-encoded secret (the kind you get when setting up an authenticator app).
+
+function base32Decode(encoded) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  const clean = encoded.replace(/[\s=-]+/g, "").toUpperCase();
+  for (const ch of clean) {
+    const val = alphabet.indexOf(ch);
+    if (val === -1) continue;
+    bits += val.toString(2).padStart(5, "0");
+  }
+  const bytes = new Uint8Array(Math.floor(bits.length / 8));
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(bits.slice(i * 8, i * 8 + 8), 2);
+  }
+  return bytes;
+}
+
+async function hmacSha1(keyBytes, message) {
+  const key = await crypto.subtle.importKey(
+    "raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, message);
+  return new Uint8Array(sig);
+}
+
+async function generateTOTP(base32Secret, periodSeconds = 30, digits = 6) {
+  const keyBytes = base32Decode(base32Secret);
+  const counter = Math.floor(Date.now() / 1000 / periodSeconds);
+  // Counter as big-endian 8-byte buffer
+  const counterBuf = new ArrayBuffer(8);
+  const view = new DataView(counterBuf);
+  view.setUint32(4, counter, false); // low 32 bits (high 32 are 0 for decades)
+  const hash = await hmacSha1(keyBytes, counterBuf);
+  // Dynamic truncation
+  const offset = hash[hash.length - 1] & 0x0f;
+  const code =
+    ((hash[offset] & 0x7f) << 24) |
+    ((hash[offset + 1] & 0xff) << 16) |
+    ((hash[offset + 2] & 0xff) << 8) |
+    (hash[offset + 3] & 0xff);
+  return String(code % 10 ** digits).padStart(digits, "0");
+}
+
 // ─── State ───
 
 let state = {
@@ -1067,13 +1113,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     state.mfaStartTime = Date.now();
     saveState();
     sendProgress();
-    addLog("MFA required — please complete verification in the browser tab.");
-    broadcastToPopup({ type: "mfaRequired" });
-    showNotification("MFA Required", "Please complete multi-factor authentication in the browser tab.");
 
     // Set up keepalive and timeout
     startKeepalive();
     chrome.alarms.create("mfa-timeout", { delayInMinutes: MFA_TIMEOUT_MS / 60000 });
+
+    // Try auto-fill TOTP if secret is configured
+    chrome.storage.local.get(["savedTotpSecret"], async (data) => {
+      const secret = (data.savedTotpSecret || "").trim();
+      if (secret) {
+        try {
+          const code = await generateTOTP(secret);
+          addLog("TOTP code generated, auto-filling MFA...");
+          await sendToTab(state.tabId, { action: "fillMfa", code });
+          broadcastToPopup({ type: "mfaAutoFilled" });
+          return; // Don't show manual MFA prompt
+        } catch (err) {
+          addLog("TOTP auto-fill failed: " + err.message + " — falling back to manual.");
+        }
+      }
+      // No TOTP secret or generation failed — prompt user
+      addLog("MFA required — please complete verification in the browser tab.");
+      broadcastToPopup({ type: "mfaRequired" });
+      showNotification("MFA Required", "Please complete multi-factor authentication in the browser tab.");
+    });
+  }
+
+  if (msg.event === "mfaAutoFillFailed") {
+    addLog("TOTP auto-fill failed: " + (msg.reason || "unknown") + " — waiting for manual MFA.");
+    broadcastToPopup({ type: "mfaRequired" });
+    showNotification("MFA Required", "Auto-fill failed. Please complete MFA manually in the browser tab.");
   }
 
   if (msg.event === "loginComplete") {
@@ -1303,13 +1372,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ saved: true });
   }
 
+  if (msg.action === "saveTotpSecret") {
+    chrome.storage.local.set({ savedTotpSecret: msg.secret });
+    sendResponse({ saved: true });
+  }
+
   if (msg.action === "loadCredentials") {
-    chrome.storage.local.get(["savedUsername", "savedPassword", "savedEmrEmail", "savedEmrPassword"], (data) => {
+    chrome.storage.local.get(["savedUsername", "savedPassword", "savedEmrEmail", "savedEmrPassword", "savedTotpSecret"], (data) => {
       sendResponse({
         username: data.savedUsername || "",
         password: data.savedPassword || "",
         emrEmail: data.savedEmrEmail || "",
         emrPassword: data.savedEmrPassword || "",
+        totpSecret: data.savedTotpSecret || "",
       });
     });
     return true; // async response
