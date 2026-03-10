@@ -428,12 +428,12 @@
           // Log what appeared
           logMantineDropdown();
 
-          // Find and click the matching option
+          // Press Enter to select the first filtered option
           const option = findMantineOption(sourceName);
           if (option) {
-            clickElement(option);
+            fundingInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
             selectedCount++;
-            log(`Selected funding source: "${sourceName}"`);
+            log(`Selected funding source: "${sourceName}" (via Enter)`);
             await delay(500);
           } else {
             log(`Could not find funding source option: "${sourceName}"`);
@@ -580,6 +580,7 @@
   }
 
   // Select an option from a Mantine MultiSelect by typing into the search input
+  // and pressing Enter to confirm the selection.
   async function selectMantineMultiSelectOption(labelText, optionText) {
     const input = await findAndClickFilterDropdown(labelText);
     if (!input) return false;
@@ -593,10 +594,11 @@
 
     logMantineDropdown();
 
+    // Press Enter to select the first filtered option (Mantine responds to Enter)
     const option = findMantineOption(optionText);
     if (option) {
-      clickElement(option);
-      log(`Selected "${optionText}" in "${labelText}"`);
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+      log(`Selected "${optionText}" in "${labelText}" (via Enter)`);
       await delay(500);
       return true;
     }
