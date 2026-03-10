@@ -236,128 +236,176 @@
 
     const diagnostics = [];
 
-    // ── Status Filter ──
-    log("Looking for Status filter...");
+    // ── Step 1: Open the filter panel ──
+    // The filter panel is hidden by default. It's opened by clicking a filter icon
+    // button in the top-right area of the page (looks like horizontal lines/sliders).
+    log("Looking for filter panel toggle button...");
 
-    // Strategy: Look for a dropdown/select or clickable element related to "Status"
-    // React apps often use custom dropdowns, not native <select>
+    let filterPanelOpened = false;
+
+    // Log all buttons in the top area for diagnostics
+    const allBtns = document.querySelectorAll("button");
+    log(`Total buttons on page: ${allBtns.length}`);
+    for (let i = 0; i < allBtns.length; i++) {
+      const btn = allBtns[i];
+      const text = (btn.textContent || "").trim().substring(0, 30);
+      const ariaLabel = btn.getAttribute("aria-label") || "";
+      const title = btn.getAttribute("title") || "";
+      const hasSvg = btn.querySelector("svg") ? "yes" : "no";
+      if (ariaLabel || title || text.length < 5) {
+        log(`  Button ${i}: text="${text}" aria="${ariaLabel}" title="${title}" svg=${hasSvg}`);
+      }
+    }
+
+    // Strategy 1: Find button with filter-related aria-label or title
+    let filterToggle = null;
+    for (const btn of allBtns) {
+      const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+      const title = (btn.getAttribute("title") || "").toLowerCase();
+      if (ariaLabel.includes("filter") || title.includes("filter") ||
+          ariaLabel.includes("column") || title.includes("column")) {
+        filterToggle = btn;
+        log(`Found filter toggle by aria/title: aria="${ariaLabel}" title="${title}"`);
+        break;
+      }
+    }
+
+    // Strategy 2: Look for an icon-only button with SVG (filter icon is typically
+    // the middle of 3 icon buttons in the top-right area)
+    if (!filterToggle) {
+      // Find icon-only buttons (no text content, has SVG)
+      const iconBtns = Array.from(allBtns).filter((b) => {
+        const text = (b.textContent || "").trim();
+        return text.length === 0 && b.querySelector("svg");
+      });
+      log(`Found ${iconBtns.length} icon-only SVG buttons`);
+
+      // The filter icon is typically a lines/slider icon — look for common patterns
+      for (const btn of iconBtns) {
+        const svg = btn.querySelector("svg");
+        const svgHtml = (svg.outerHTML || "").toLowerCase();
+        // Filter icons often have horizontal lines or "filter" in path data
+        if (svgHtml.includes("filter") || svgHtml.includes("funnel") ||
+            svgHtml.includes("sliders") || svgHtml.includes("adjustments")) {
+          filterToggle = btn;
+          log("Found filter toggle by SVG content keyword");
+          break;
+        }
+      }
+
+      // If still not found, try the icon buttons in the top-right area
+      // From the screenshot: there are 3 icon buttons, filter is the middle one
+      if (!filterToggle && iconBtns.length >= 2) {
+        // Look at their position — filter buttons are usually near the top
+        const topBtns = iconBtns.filter((b) => {
+          const rect = b.getBoundingClientRect();
+          return rect.top < 250 && rect.right > window.innerWidth * 0.7;
+        });
+        log(`Icon buttons in top-right area: ${topBtns.length}`);
+        for (let i = 0; i < topBtns.length; i++) {
+          const rect = topBtns[i].getBoundingClientRect();
+          log(`  Top-right button ${i}: x=${Math.round(rect.x)} y=${Math.round(rect.y)} w=${Math.round(rect.width)} h=${Math.round(rect.height)}`);
+        }
+
+        if (topBtns.length >= 2) {
+          // Middle button of the group is likely the filter toggle
+          // Sort by x position and pick the middle one
+          topBtns.sort((a, b) => a.getBoundingClientRect().x - b.getBoundingClientRect().x);
+          const middleIdx = Math.floor(topBtns.length / 2);
+          if (topBtns.length === 3) {
+            filterToggle = topBtns[1]; // Middle of 3
+          } else {
+            filterToggle = topBtns[middleIdx];
+          }
+          log(`Using middle top-right icon button as filter toggle (index ${middleIdx})`);
+        }
+      }
+    }
+
+    if (filterToggle) {
+      log("Clicking filter panel toggle...");
+      clickElement(filterToggle);
+      await delay(1500);
+      filterPanelOpened = true;
+
+      // Check if filter panel appeared — look for labeled inputs/dropdowns
+      const labels = document.querySelectorAll("label, div > span, div > p");
+      const filterLabels = [];
+      for (const l of labels) {
+        const text = (l.textContent || "").trim();
+        if (text.length > 0 && text.length < 30 && /status|funding|name|sex|diagnos|address|referr|author/i.test(text)) {
+          filterLabels.push(text);
+        }
+      }
+      log(`Filter panel labels found: [${filterLabels.join(", ")}]`);
+
+      if (filterLabels.length === 0) {
+        log("Filter panel may not have opened — retrying click...");
+        clickElement(filterToggle);
+        await delay(1500);
+      }
+    } else {
+      log("Could not find filter panel toggle button");
+      diagnostics.push("Filter panel toggle not found");
+    }
+
+    logPageState();
+
+    // ── Step 2: Status Filter ──
+    log("Looking for Status filter dropdown...");
     let statusApplied = false;
 
-    // Try native select first
-    let statusSelect = findInputByLabel("status");
-    if (statusSelect && statusSelect.tagName === "SELECT") {
-      log(`Found native Status select: id="${statusSelect.id}"`);
-      const activeOpt = Array.from(statusSelect.options).find((o) => /active/i.test(o.text));
-      if (activeOpt) {
-        statusSelect.value = activeOpt.value;
-        statusSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    // The filter panel has labeled dropdowns. Each is a label + a custom select (div with up/down arrows).
+    // Find the Status label, then find the dropdown control near it.
+    let statusDropdown = await findAndClickFilterDropdown("Status");
+    if (statusDropdown) {
+      await delay(500);
+      // Look for "Active" option in the opened dropdown
+      const activeOption = findByText("li, div[role='option'], div[class*='option'], span, button, [class*='item']", /^active$/i);
+      if (activeOption) {
+        clickElement(activeOption);
         statusApplied = true;
-        log("Status set to Active via native select");
-      }
-    }
-
-    if (!statusApplied) {
-      // Look for a custom dropdown — common patterns: div with role="listbox", button with aria-haspopup, etc.
-      // Try clicking a button/div labeled "Status" to open a dropdown
-      let statusTrigger = findByText("button, [role='button'], div.select, div[class*='select'], label", /^status$/i);
-      if (!statusTrigger) {
-        // Look for any element that looks like a filter label
-        statusTrigger = findByText("div, span, label, button", /^status/i);
-      }
-
-      if (statusTrigger) {
-        log(`Found Status trigger: tag=${statusTrigger.tagName} text="${(statusTrigger.textContent || "").trim().substring(0, 40)}"`);
-        clickElement(statusTrigger);
-        await delay(500);
-
-        // Look for "Active" in dropdown options
-        const activeOption = findByText("li, div[role='option'], div[class*='option'], span, button", /^active$/i);
-        if (activeOption) {
-          clickElement(activeOption);
-          statusApplied = true;
-          log("Status set to Active via custom dropdown");
-          await delay(500);
-        } else {
-          log("Could not find 'Active' option in dropdown");
-          // Log visible options for debugging
-          const options = document.querySelectorAll("li, div[role='option'], div[class*='option']");
-          const optTexts = Array.from(options).slice(0, 20).map((o) => `"${(o.textContent || "").trim().substring(0, 40)}"`);
-          log(`Visible options: ${optTexts.join(", ")}`);
-        }
+        log("Status set to Active");
+        await delay(1000);
       } else {
-        log("Could not find Status filter trigger");
-        diagnostics.push("Status filter not found");
+        log("Could not find 'Active' option in Status dropdown");
+        logDropdownOptions();
       }
+    } else {
+      diagnostics.push("Status filter dropdown not found");
     }
 
-    // ── Funding Sources Filter ──
-    log("Looking for Funding Sources filter...");
-
+    // ── Step 3: Funding Sources Filter ──
+    log("Looking for Funding Sources filter dropdown...");
     let fundingApplied = false;
     const targetSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
 
-    // Look for the funding sources multi-select trigger.
-    // IMPORTANT: The page has a table column header "FUNDING SOURCES" — we must NOT
-    // match that. Look for small, filter-specific elements first (buttons, labels,
-    // small divs). Avoid matching large container divs.
-    let fundingTrigger = null;
-
-    // Strategy 1: Buttons/labels with "Funding Source" text
-    fundingTrigger = findByText("button, [role='button'], label", /funding\s*source/i);
-
-    // Strategy 2: Small div/span elements (filter controls are typically compact)
-    if (!fundingTrigger) {
-      const candidates = document.querySelectorAll("div, span");
-      for (const el of candidates) {
-        const text = (el.textContent || "").trim();
-        if (/^funding\s*source/i.test(text) && text.length < 50) {
-          // Make sure it's a small filter element, not a big container
-          fundingTrigger = el;
-          log(`Found compact Funding Sources element: tag=${el.tagName} text="${text}" class="${el.className}"`);
-          break;
-        }
-      }
+    let fundingDropdown = await findAndClickFilterDropdown("Funding sources");
+    if (!fundingDropdown) {
+      fundingDropdown = await findAndClickFilterDropdown("Funding");
     }
 
-    // Strategy 3: Look for filter controls near the Status filter (sibling elements)
-    if (!fundingTrigger) {
-      // The Status filter worked — look for similar elements nearby
-      const allFilterLike = document.querySelectorAll("div[class*='filter'], div[class*='select'], div[class*='dropdown'], div[class*='multi']");
-      for (const el of allFilterLike) {
-        const text = (el.textContent || "").trim().toLowerCase();
-        if (text.includes("funding") && text.length < 100) {
-          fundingTrigger = el;
-          log(`Found Funding Sources filter by class pattern: class="${el.className}"`);
-          break;
-        }
-      }
-    }
-
-    if (fundingTrigger) {
-      log(`Found Funding Sources trigger: tag=${fundingTrigger.tagName} text="${(fundingTrigger.textContent || "").trim().substring(0, 50)}" class="${(fundingTrigger.className || "").substring(0, 60)}"`);
-      clickElement(fundingTrigger);
-      await delay(1000);
-
-      // Log what appeared after clicking
-      const dropdownOptions = document.querySelectorAll("li, div[role='option'], div[class*='option'], [class*='menu-item'], [class*='checkbox']");
-      log(`After clicking trigger: ${dropdownOptions.length} potential options visible`);
-      for (let i = 0; i < Math.min(dropdownOptions.length, 15); i++) {
-        log(`  Option ${i}: "${(dropdownOptions[i].textContent || "").trim().substring(0, 60)}" tag=${dropdownOptions[i].tagName} class="${(dropdownOptions[i].className || "").substring(0, 40)}"`);
-      }
+    if (fundingDropdown) {
+      await delay(500);
+      logDropdownOptions();
 
       let selectedCount = 0;
       for (const sourceName of targetSources) {
-        // Try exact match first, then partial/contains match
-        let option = findByText("li, div[role='option'], div[class*='option'], span, label, [class*='menu-item'], [class*='checkbox']", new RegExp(`^${escapeRegex(sourceName)}$`, "i"));
+        // Try exact match
+        let option = findByText("li, div[role='option'], div[class*='option'], span, label, [class*='item']", new RegExp(`^\\s*${escapeRegex(sourceName)}\\s*$`, "i"));
+        // Try partial match
         if (!option) {
-          // Try contains match for truncated names
-          option = findByText("li, div[role='option'], div[class*='option'], span, label, [class*='menu-item'], [class*='checkbox']", new RegExp(escapeRegex(sourceName.substring(0, 20)), "i"));
+          option = findByText("li, div[role='option'], div[class*='option'], span, label, [class*='item']", new RegExp(escapeRegex(sourceName.substring(0, 15)), "i"));
         }
         if (option) {
-          clickElement(option);
-          selectedCount++;
-          log(`Selected funding source: ${sourceName}`);
-          await delay(300);
+          // Make sure we're not clicking a table cell or the label itself
+          const optText = (option.textContent || "").trim();
+          if (optText.length < 100) {
+            clickElement(option);
+            selectedCount++;
+            log(`Selected funding source: ${sourceName}`);
+            await delay(300);
+          }
         } else {
           log(`Could not find funding source option: "${sourceName}"`);
         }
@@ -368,39 +416,19 @@
         log(`Selected ${selectedCount}/${targetSources.length} funding sources`);
       }
 
-      // Close the dropdown by clicking elsewhere
+      // Close the dropdown
       await delay(300);
       document.body.click();
-      await delay(300);
+      await delay(500);
     } else {
-      log("Could not find Funding Sources filter trigger");
-      // Log all small text elements for debugging
-      const smallDivs = document.querySelectorAll("div, span, label, button");
-      const filterLike = [];
-      for (const el of smallDivs) {
-        const text = (el.textContent || "").trim();
-        if (text.length > 0 && text.length < 30 && /fund|source|payer|filter/i.test(text)) {
-          filterLike.push(`${el.tagName}:"${text}" class="${(el.className || "").substring(0, 30)}"`);
-        }
-      }
-      log(`Filter-like elements: ${filterLike.join("; ") || "none found"}`);
-      diagnostics.push("Funding Sources filter not found");
+      diagnostics.push("Funding Sources filter dropdown not found");
     }
 
-    // ── Apply/Search Button ──
-    log("Looking for Apply/Search/Run button...");
-
-    let applyBtn = findByText("button", /^(apply|search|run|filter|generate|submit)$/i);
-    if (!applyBtn) applyBtn = findByText("button", /apply|search|run.*report|filter/i);
-    if (!applyBtn) applyBtn = document.querySelector('button[type="submit"]');
-
-    if (applyBtn) {
-      log(`Found Apply button: "${(applyBtn.textContent || "").trim()}" type="${applyBtn.type}"`);
-      clickElement(applyBtn);
-      log("Apply button clicked — waiting for results...");
+    // ── Step 4: Wait for table to update ──
+    if (statusApplied || fundingApplied) {
+      log("Filters applied — waiting for table to update...");
       await delay(3000);
 
-      // Wait for a table to appear
       try {
         await waitFor(() => {
           const tables = document.querySelectorAll("table");
@@ -409,14 +437,8 @@
         }, 30000, 1000);
         log("Table loaded after filter application");
       } catch {
-        log("Timeout waiting for table to load after filter");
+        log("Timeout waiting for table to update after filter");
       }
-    } else {
-      log("Could not find Apply/Search button");
-      const allBtns = document.querySelectorAll("button");
-      const btnInfo = Array.from(allBtns).map((b) => `"${(b.textContent || "").trim().substring(0, 30)}"`).join("; ");
-      log(`All buttons on page: ${btnInfo}`);
-      diagnostics.push("Apply button not found");
     }
 
     logPageState();
@@ -427,6 +449,61 @@
       fundingApplied,
       diagnostics: diagnostics.join("; "),
     };
+  }
+
+  // Helper: find a filter panel dropdown by its label text, then click the dropdown trigger
+  async function findAndClickFilterDropdown(labelText) {
+    log(`Looking for filter dropdown labeled "${labelText}"...`);
+
+    // Strategy 1: Find the label element, then find the clickable dropdown near it
+    const allTextEls = document.querySelectorAll("label, p, span, div");
+    for (const el of allTextEls) {
+      const text = (el.textContent || "").trim();
+      // Match only the label itself (short text, matches pattern)
+      if (text.length > 30 || !new RegExp(`^${escapeRegex(labelText)}$`, "i").test(text)) continue;
+
+      log(`Found label "${text}" (tag=${el.tagName}, class="${(el.className || "").substring(0, 40)}")`);
+
+      // The dropdown control should be a sibling or nearby child
+      const parent = el.parentElement;
+      if (!parent) continue;
+
+      // Look for a clickable dropdown trigger near this label
+      // Custom React selects often use a div with role="combobox" or a button
+      const candidates = parent.querySelectorAll("button, [role='combobox'], [role='listbox'], div[class*='select'], input, [class*='trigger'], [class*='dropdown']");
+      if (candidates.length > 0) {
+        const trigger = candidates[0];
+        log(`Found dropdown trigger near "${labelText}": tag=${trigger.tagName} class="${(trigger.className || "").substring(0, 40)}"`);
+        clickElement(trigger);
+        return trigger;
+      }
+
+      // The label's parent might BE the dropdown container — look for a clickable child
+      const clickables = parent.querySelectorAll("svg, [class*='chevron'], [class*='arrow'], [class*='icon']");
+      if (clickables.length > 0) {
+        log(`Clicking parent of "${labelText}" label (has ${clickables.length} icon elements)`);
+        clickElement(parent);
+        return parent;
+      }
+
+      // Just click the parent container
+      log(`Clicking parent container of "${labelText}" label`);
+      clickElement(parent);
+      return parent;
+    }
+
+    log(`Could not find filter dropdown for "${labelText}"`);
+    return null;
+  }
+
+  // Helper: log visible dropdown options
+  function logDropdownOptions() {
+    const options = document.querySelectorAll("li, div[role='option'], div[class*='option'], [role='listbox'] > *, [class*='menu'] > *");
+    log(`Visible dropdown options: ${options.length}`);
+    for (let i = 0; i < Math.min(options.length, 20); i++) {
+      const text = (options[i].textContent || "").trim().substring(0, 60);
+      log(`  Option ${i}: "${text}" tag=${options[i].tagName} class="${(options[i].className || "").substring(0, 30)}"`);
+    }
   }
 
   // ─── Table Scraping ───
