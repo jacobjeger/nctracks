@@ -157,7 +157,7 @@ async function ensureTab() {
   }
 
   return new Promise((resolve, reject) => {
-    chrome.tabs.create({ url: "about:blank", active: true }, (tab) => {
+    chrome.tabs.create({ url: "about:blank", active: false }, (tab) => {
       if (chrome.runtime.lastError) {
         reject(new Error("Failed to create tab: " + chrome.runtime.lastError.message));
         return;
@@ -169,17 +169,24 @@ async function ensureTab() {
   });
 }
 
-// Track tab removal
+// Track tab removal — attempt recovery instead of stopping
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (tabId === state.tabId) {
     state.tabId = null;
     if (state.status === "processing" || state.status === "logging_in" || state.status === "mfa_waiting") {
-      addLog("Browser tab was closed during operation.");
-      broadcastToPopup({ type: "tabClosed" });
-      state.status = "error";
-      state.lastErrorType = "tab_error";
-      saveState();
-      sendProgress();
+      addLog("Browser tab was closed. Attempting to recover...");
+      // Don't stop — let ensureTab() create a new tab on next iteration
+      // The processing loop already calls ensureTab() and handles missing tabs
+      if (state.status === "mfa_waiting") {
+        // MFA can't be recovered — user needs the original tab
+        addLog("MFA tab was closed — cannot recover MFA session.");
+        broadcastToPopup({ type: "tabClosed" });
+        state.status = "error";
+        state.lastErrorType = "tab_error";
+        saveState();
+        sendProgress();
+      }
+      // For processing/logging_in, the loop will recover automatically
     }
   }
 });
@@ -718,12 +725,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     startKeepalive();
     addLog(`Starting verification for ${state.totalPatients} patients...`);
 
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs.length > 0 && tabs[0].url && !tabs[0].url.startsWith("chrome://")) {
-        state.tabId = tabs[0].id;
-      }
-      startLogin();
-    });
+    // Always create a dedicated tab — don't hijack the user's current tab
+    startLogin();
 
     sendResponse({ started: true });
   }
@@ -768,12 +771,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     addLog("Testing login...");
 
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs.length > 0 && tabs[0].url && !tabs[0].url.startsWith("chrome://")) {
-        state.tabId = tabs[0].id;
-      }
-      startLogin();
-    });
+    // Always create a dedicated tab for login test
+    startLogin();
 
     sendResponse({ started: true });
   }
