@@ -163,10 +163,25 @@
     const pageText = (document.body.innerText || "").toUpperCase();
     const result = {
       status: "UNKNOWN",
+      recipient_name: "",
+      recipient_id: "",
+      dob: "",
+      aid_category: "",
       coverage_start: "",
       coverage_end: "",
       plan_name: "",
+      county: "",
+      address: "",
+      phone: "",
+      gender: "",
+      race: "",
+      managed_care: "",
+      copay: "",
+      medicare: "",
+      tpl: "",
+      lock_in: "",
       notes: "",
+      raw_fields: {},  // All label-value pairs found on page
     };
 
     // Check for error pages first
@@ -176,47 +191,114 @@
       return result;
     }
 
+    // Check for error messages (like "Invalid Recipient Id")
+    try {
+      const errorSummary = document.querySelector(".error, .errorMessage, [class*='error' i]");
+      if (errorSummary) {
+        const errText = errorSummary.textContent.trim();
+        if (errText && errText.length < 500) {
+          result.notes = errText;
+        }
+      }
+      // Also check for list items in error summaries
+      const errorItems = document.querySelectorAll("li a[href*='error'], .error li, ul.error li");
+      if (errorItems.length > 0) {
+        result.notes = Array.from(errorItems).map((li) => li.textContent.trim()).join("; ");
+      }
+    } catch { /* ignore */ }
+
     // Check for "not found"
     for (const phrase of CFG.NOT_FOUND_PHRASES) {
       if (pageText.includes(phrase)) {
         result.status = "NOT FOUND";
-        result.notes = "Patient not found in system";
+        if (!result.notes) result.notes = "Patient not found in system";
         return result;
       }
     }
 
-    // Determine eligibility status — check most specific first
-    if (pageText.includes("NOT ELIGIBLE") || pageText.includes("INELIGIBLE")) {
-      result.status = "NOT ELIGIBLE";
-    } else if (pageText.includes("ELIGIBLE")) {
-      result.status = "ELIGIBLE";
-    } else if (pageText.includes("TERMINATED")) {
-      result.status = "TERMINATED";
-    } else if (pageText.includes("INACTIVE")) {
-      result.status = "INACTIVE";
-    } else if (pageText.includes("ACTIVE")) {
-      result.status = "ACTIVE";
-    } else if (pageText.includes("PENDING")) {
-      result.status = "PENDING";
-    }
-
-    // Try to extract coverage data from table cells
+    // ── Comprehensive table scraper ──
+    // Scan all table cells for label-value pairs (NCTracks uses table-based layout)
     try {
       const allTds = document.querySelectorAll("td");
       for (let i = 0; i < allTds.length; i++) {
-        const cellText = (allTds[i].textContent || "").trim().toUpperCase();
+        const cell = allTds[i];
+        const cellText = (cell.textContent || "").trim();
+        const cellUpper = cellText.toUpperCase();
+
+        // Skip empty cells and very long cells (likely data blocks, not labels)
+        if (!cellText || cellText.length > 60) continue;
+
+        // Look for the next sibling td as value
         const nextTd = allTds[i + 1];
         if (!nextTd) continue;
         const nextText = (nextTd.textContent || "").trim();
+        if (!nextText || nextText === "N/A") continue;
 
-        if (cellText.includes("START") && !result.coverage_start && nextText && nextText !== "N/A") {
+        // Store every label-value pair we find
+        if (cellText.includes(":") || cellUpper.match(/^[A-Z\s\/]+$/)) {
+          const label = cellText.replace(/:$/, "").trim();
+          if (label && nextText && label !== nextText) {
+            result.raw_fields[label] = nextText;
+          }
+        }
+
+        // Map specific labels to result fields
+        if (cellUpper.includes("RECIPIENT NAME") || cellUpper === "NAME") {
+          if (!result.recipient_name) result.recipient_name = nextText;
+        }
+        if (cellUpper.includes("RECIPIENT") && cellUpper.includes("ID") && !cellUpper.includes("NAME")) {
+          if (!result.recipient_id) result.recipient_id = nextText;
+        }
+        if (cellUpper.includes("DATE OF BIRTH") || cellUpper === "DOB") {
+          if (!result.dob) result.dob = nextText;
+        }
+        if (cellUpper.includes("AID") && cellUpper.includes("CATEG")) {
+          if (!result.aid_category) result.aid_category = nextText;
+        }
+        if (cellUpper.includes("COVERAGE") && cellUpper.includes("START") || cellUpper.includes("BEGIN") && cellUpper.includes("DATE")) {
+          if (!result.coverage_start) result.coverage_start = nextText;
+        }
+        if (cellUpper.includes("COVERAGE") && cellUpper.includes("END") || cellUpper.includes("TERMINATION") && cellUpper.includes("DATE")) {
+          if (!result.coverage_end) result.coverage_end = nextText;
+        }
+        if (cellUpper.includes("START") && !cellUpper.includes("COVERAGE") && !result.coverage_start) {
           result.coverage_start = nextText;
         }
-        if ((cellText.includes("END") || cellText.includes("TERMINATION")) && !result.coverage_end && nextText && nextText !== "N/A") {
+        if ((cellUpper.includes("END") || cellUpper.includes("TERMINATION")) && !cellUpper.includes("COVERAGE") && !result.coverage_end) {
           result.coverage_end = nextText;
         }
-        if (cellText.includes("PLAN") && !result.plan_name && nextText && nextText !== "N/A") {
-          result.plan_name = nextText;
+        if (cellUpper.includes("PLAN") && !cellUpper.includes("COPAY")) {
+          if (!result.plan_name) result.plan_name = nextText;
+        }
+        if (cellUpper.includes("COUNTY")) {
+          if (!result.county) result.county = nextText;
+        }
+        if (cellUpper.includes("ADDRESS")) {
+          if (!result.address) result.address = nextText;
+        }
+        if (cellUpper.includes("PHONE") || cellUpper.includes("TELEPHONE")) {
+          if (!result.phone) result.phone = nextText;
+        }
+        if (cellUpper === "GENDER" || cellUpper === "SEX") {
+          if (!result.gender) result.gender = nextText;
+        }
+        if (cellUpper === "RACE") {
+          if (!result.race) result.race = nextText;
+        }
+        if (cellUpper.includes("MANAGED CARE") || cellUpper.includes("MCO") || cellUpper.includes("HEALTH PLAN")) {
+          if (!result.managed_care) result.managed_care = nextText;
+        }
+        if (cellUpper.includes("COPAY") || cellUpper.includes("CO-PAY")) {
+          if (!result.copay) result.copay = nextText;
+        }
+        if (cellUpper.includes("MEDICARE")) {
+          if (!result.medicare) result.medicare = nextText;
+        }
+        if (cellUpper.includes("TPL") || cellUpper.includes("THIRD PARTY")) {
+          if (!result.tpl) result.tpl = nextText;
+        }
+        if (cellUpper.includes("LOCK") && cellUpper.includes("IN")) {
+          if (!result.lock_in) result.lock_in = nextText;
         }
       }
     } catch (err) {
@@ -235,10 +317,37 @@
       logError("scrapeResults span scan", err);
     }
 
+    // Determine eligibility status — check most specific first
+    if (pageText.includes("NOT ELIGIBLE") || pageText.includes("INELIGIBLE")) {
+      result.status = "NOT ELIGIBLE";
+    } else if (pageText.includes("ELIGIBLE")) {
+      result.status = "ELIGIBLE";
+    } else if (pageText.includes("TERMINATED")) {
+      result.status = "TERMINATED";
+    } else if (pageText.includes("INACTIVE")) {
+      result.status = "INACTIVE";
+    } else if (pageText.includes("ACTIVE")) {
+      result.status = "ACTIVE";
+    } else if (pageText.includes("PENDING")) {
+      result.status = "PENDING";
+    }
+
     // If status is still UNKNOWN, add diagnostic info
     if (result.status === "UNKNOWN") {
       const diag = getPageDiagnostics();
-      result.notes = `Could not determine status. Page: "${diag.title}", ${diag.bodyLength} chars`;
+      result.notes = (result.notes ? result.notes + " | " : "") +
+        `Could not determine status. Page: "${diag.title}", ${diag.bodyLength} chars`;
+    }
+
+    // Log raw fields for debugging
+    const fieldCount = Object.keys(result.raw_fields).length;
+    if (fieldCount > 0) {
+      try {
+        chrome.runtime.sendMessage({
+          event: "contentScriptLog",
+          message: `Scraped ${fieldCount} fields: ${JSON.stringify(result.raw_fields)}`,
+        });
+      } catch { /* ignore */ }
     }
 
     return result;

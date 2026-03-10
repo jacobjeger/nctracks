@@ -647,18 +647,32 @@ async function processNextPatient() {
 
         state.results.push({
           medicaid_id: patient.medicaid_id,
-          name: patientName,
+          name: result.recipient_name || patientName,
           status: result.status || "UNKNOWN",
+          recipient_id: result.recipient_id || "",
+          dob: result.dob || "",
+          aid_category: result.aid_category || "",
           coverage_start: result.coverage_start || "",
           coverage_end: result.coverage_end || "",
           plan_name: result.plan_name || "",
+          county: result.county || "",
+          managed_care: result.managed_care || "",
+          copay: result.copay || "",
+          medicare: result.medicare || "",
+          tpl: result.tpl || "",
+          lock_in: result.lock_in || "",
+          address: result.address || "",
+          phone: result.phone || "",
+          gender: result.gender || "",
+          race: result.race || "",
           checked_at: new Date().toISOString(),
           notes: result.notes || "",
+          raw_fields: result.raw_fields || {},
         });
 
         const statusEmoji = (result.status || "").toUpperCase() === "ELIGIBLE" ? "ELIGIBLE" :
           (result.status || "").toUpperCase() === "NOT ELIGIBLE" ? "NOT ELIGIBLE" : result.status;
-        addLog(`  Result: ${statusEmoji}${result.notes ? " — " + result.notes : ""}`);
+        addLog(`  Result: ${statusEmoji}${result.recipient_name ? " — " + result.recipient_name : ""}${result.plan_name ? " — Plan: " + result.plan_name : ""}${result.aid_category ? " — Aid: " + result.aid_category : ""}`);
         succeeded = true;
         break;
       } catch (err) {
