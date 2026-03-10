@@ -668,45 +668,21 @@
       }
 
       diagnostics.push(`Clicking button: value="${checkBtn.value || ""}" text="${(checkBtn.textContent || "").trim().substring(0, 30)}"`);
-      checkBtn.click();
 
-      // Wait for results to load
-      await delay(3000);
+      // IMPORTANT: Clicking Check Eligibility causes a page navigation which
+      // destroys this content script. We must send our response BEFORE clicking.
+      // The background script will scrape results from the new page separately.
+      const clickDiagnostics = diagnostics.join("; ");
 
-      // Wait for page to show result content or timeout
-      try {
-        await waitFor(() => {
-          const text = (document.body.innerText || "").toUpperCase();
-          return text.includes("ELIGIBLE") ||
-            text.includes("NOT FOUND") ||
-            text.includes("NO RECORDS") ||
-            text.includes("INVALID") ||
-            text.includes("ACTIVE") ||
-            text.includes("TERMINATED") ||
-            text.includes("ERROR") ||
-            text.includes("INACTIVE") ||
-            text.includes("PENDING") ||
-            text.includes("COVERAGE");
-        }, 20000, 1000);
-      } catch {
-        diagnostics.push("Result page did not show expected content within 20 seconds");
-      }
+      // Use setTimeout to click AFTER we return our response
+      setTimeout(() => {
+        checkBtn.click();
+      }, 100);
 
-      // Check if session expired during wait
-      if (isSessionExpired()) {
-        return { status: "ERROR", notes: "Session expired while waiting for results" };
-      }
-
-      const result = scrapeResults();
-
-      // Append diagnostics if there were issues
-      if (diagnostics.length > 0 && !result.notes) {
-        result.notes = diagnostics.join("; ");
-      } else if (diagnostics.length > 0) {
-        result.notes += " | " + diagnostics.join("; ");
-      }
-
-      return result;
+      return {
+        submitted: true,
+        diagnostics: clickDiagnostics,
+      };
     } catch (err) {
       logError("fillAndCheck", err);
       return {
@@ -740,6 +716,17 @@
           sendResponse({ status: "ERROR", notes: "Content script error: " + err.message });
         });
       return true; // async response
+    }
+
+    if (msg.action === "scrapeResults") {
+      try {
+        const result = scrapeResults();
+        sendResponse(result);
+      } catch (err) {
+        logError("scrapeResults handler", err);
+        sendResponse({ status: "ERROR", notes: "Scrape error: " + err.message });
+      }
+      return true;
     }
 
     if (msg.action === "checkSessionStatus") {

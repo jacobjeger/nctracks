@@ -591,12 +591,53 @@ async function processNextPatient() {
           }
         }
 
-        // Fill form and check eligibility
-        const result = await sendToTab(state.tabId, {
+        // Step 1: Fill form and click Check Eligibility
+        // The content script fills the form, then clicks the button via setTimeout
+        // and returns BEFORE the page navigates (to avoid "message channel closed")
+        const fillResult = await sendToTab(state.tabId, {
           action: "fillAndCheck",
           patient: patient,
           config: state.config,
         });
+
+        if (fillResult.status === "ERROR") {
+          // Form fill itself failed (e.g. session expired, field not found)
+          state.results.push({
+            medicaid_id: patient.medicaid_id,
+            name: patientName,
+            status: fillResult.status,
+            coverage_start: "",
+            coverage_end: "",
+            plan_name: "",
+            checked_at: new Date().toISOString(),
+            notes: fillResult.notes || "",
+          });
+          addLog(`  Result: ERROR — ${fillResult.notes || "Form fill failed"}`);
+          succeeded = true;
+          break;
+        }
+
+        // Step 2: Wait for the results page to load after Check Eligibility click
+        // The click triggers a page navigation — wait for the new page
+        await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+        await delay(2000); // Extra time for content script to inject on new page
+
+        // Step 3: Scrape results from the new page
+        let result;
+        try {
+          result = await sendToTab(state.tabId, { action: "scrapeResults" });
+        } catch (scrapeErr) {
+          // If scrape fails, try once more after a short wait
+          await delay(3000);
+          result = await sendToTab(state.tabId, { action: "scrapeResults" });
+        }
+
+        // Append fill diagnostics to result notes
+        if (fillResult.diagnostics) {
+          result.notes = result.notes
+            ? result.notes + " | " + fillResult.diagnostics
+            : fillResult.diagnostics;
+        }
 
         state.results.push({
           medicaid_id: patient.medicaid_id,
