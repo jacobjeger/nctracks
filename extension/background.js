@@ -642,6 +642,22 @@ async function startFromEMR() {
       addLog(`Deduplicated: ${beforeDedup} → ${allPatients.length} unique Medicaid IDs`);
     }
 
+    // ── Post-scrape filtering (safety net) ──
+    // Filter by configured funding sources in case UI filters weren't applied
+    const cfg = typeof NCTRACKS_CONFIG !== "undefined" ? NCTRACKS_CONFIG : (globalThis.NCTRACKS_CONFIG || {});
+    const allowedSources = cfg.PASSAGEHEALTH_FUNDING_SOURCES || [];
+    if (allowedSources.length > 0 && allPatients.length > 0) {
+      const beforeFundingFilter = allPatients.length;
+      allPatients = allPatients.filter((p) => {
+        if (!p.emr_funding_source) return false;
+        const src = p.emr_funding_source.toLowerCase();
+        return allowedSources.some((allowed) => src.includes(allowed.toLowerCase()));
+      });
+      if (allPatients.length < beforeFundingFilter) {
+        addLog(`Post-scrape funding filter: ${beforeFundingFilter} → ${allPatients.length} patients (removed ${beforeFundingFilter - allPatients.length} with non-matching funding sources)`);
+      }
+    }
+
     broadcastToPopup({ type: "emrProgress", phase: "complete", patientsFound: allPatients.length });
 
     if (allPatients.length === 0) {

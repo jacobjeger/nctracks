@@ -270,15 +270,46 @@
       }
     }
 
-    // Strategy 2: Look for an icon-only button with SVG (filter icon is typically
-    // the middle of 3 icon buttons in the top-right area)
+    // Strategy 2: Find button with "Filter" or "Filters" text content
     if (!filterToggle) {
-      // Find icon-only buttons (no text content, has SVG)
+      filterToggle = findByText("button", /^filters?$/i);
+      if (!filterToggle) filterToggle = findByText("button", /show\s*filters?/i);
+      if (!filterToggle) filterToggle = findByText("button", /filter/i);
+      if (filterToggle) log(`Found filter toggle by text content: "${(filterToggle.textContent || "").trim()}"`);
+    }
+
+    // Strategy 3: Find clickable element with filter-related class names
+    if (!filterToggle) {
+      const filterClassSelectors = [
+        "button[class*='filter' i]",
+        "button[class*='Filter']",
+        "[class*='filter-toggle']",
+        "[class*='filterToggle']",
+        "[class*='filter-btn']",
+        "[class*='filter-button']",
+        "[data-testid*='filter' i]",
+        "[id*='filter' i]",
+      ];
+      for (const sel of filterClassSelectors) {
+        try {
+          const el = document.querySelector(sel);
+          if (el) {
+            filterToggle = el;
+            log(`Found filter toggle by class/attribute selector: "${sel}" class="${(el.className || "").substring(0, 60)}"`);
+            break;
+          }
+        } catch { /* invalid selector */ }
+      }
+    }
+
+    // Strategy 4: Look for an icon-only button with SVG (filter icon)
+    if (!filterToggle) {
+      // Find icon-only buttons (short or no text content, has SVG)
       const iconBtns = Array.from(allBtns).filter((b) => {
         const text = (b.textContent || "").trim();
-        return text.length === 0 && b.querySelector("svg");
+        return text.length <= 2 && b.querySelector("svg");
       });
-      log(`Found ${iconBtns.length} icon-only SVG buttons`);
+      log(`Found ${iconBtns.length} icon/short-text SVG buttons`);
 
       // The filter icon is typically a lines/slider icon — look for common patterns
       for (const btn of iconBtns) {
@@ -286,15 +317,32 @@
         const svgHtml = (svg.outerHTML || "").toLowerCase();
         // Filter icons often have horizontal lines or "filter" in path data
         if (svgHtml.includes("filter") || svgHtml.includes("funnel") ||
-            svgHtml.includes("sliders") || svgHtml.includes("adjustments")) {
+            svgHtml.includes("sliders") || svgHtml.includes("adjustments") ||
+            svgHtml.includes("tabler-icon-filter") || svgHtml.includes("icon-filter") ||
+            svgHtml.includes("icon-adjustments")) {
           filterToggle = btn;
           log("Found filter toggle by SVG content keyword");
           break;
         }
       }
 
+      // Also check SVG use/href references (Mantine often uses tabler icons)
+      if (!filterToggle) {
+        for (const btn of iconBtns) {
+          const uses = btn.querySelectorAll("use");
+          for (const u of uses) {
+            const href = u.getAttribute("href") || u.getAttribute("xlink:href") || "";
+            if (/filter|funnel|sliders|adjustments/i.test(href)) {
+              filterToggle = btn;
+              log(`Found filter toggle by SVG use href: "${href}"`);
+              break;
+            }
+          }
+          if (filterToggle) break;
+        }
+      }
+
       // If still not found, try the icon buttons in the top-right area
-      // From the screenshot: there are 3 icon buttons, filter is the middle one
       if (!filterToggle && iconBtns.length >= 2) {
         // Look at their position — filter buttons are usually near the top
         const topBtns = iconBtns.filter((b) => {
@@ -308,8 +356,6 @@
         }
 
         if (topBtns.length >= 2) {
-          // Middle button of the group is likely the filter toggle
-          // Sort by x position and pick the middle one
           topBtns.sort((a, b) => a.getBoundingClientRect().x - b.getBoundingClientRect().x);
           const middleIdx = Math.floor(topBtns.length / 2);
           if (topBtns.length === 3) {
@@ -318,6 +364,20 @@
             filterToggle = topBtns[middleIdx];
           }
           log(`Using middle top-right icon button as filter toggle (index ${middleIdx})`);
+        }
+      }
+    }
+
+    // Strategy 5: Look for any anchor/div that acts as filter toggle
+    if (!filterToggle) {
+      const candidates = document.querySelectorAll("a[href*='filter' i], div[role='button']");
+      for (const el of candidates) {
+        const text = (el.textContent || "").trim().toLowerCase();
+        const ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
+        if (text.includes("filter") || ariaLabel.includes("filter")) {
+          filterToggle = el;
+          log(`Found filter toggle (non-button element): tag=${el.tagName} text="${text.substring(0, 30)}"`);
+          break;
         }
       }
     }
@@ -399,7 +459,44 @@
       await delay(500);
     }
 
-    // ── Step 4: Wait for table to update ──
+    // ── Step 4: Click Apply / Filter button (if present) ──
+    if (statusApplied || fundingApplied) {
+      log("Looking for Apply / Filter button...");
+      let applyBtn = null;
+
+      // Strategy 1: Button with "Apply", "Filter", or "Search" text
+      applyBtn = findByText("button", /^(apply|filter|search|submit|go)(\s+filters?)?$/i);
+
+      // Strategy 2: Button with relevant aria-label
+      if (!applyBtn) {
+        for (const btn of document.querySelectorAll("button")) {
+          const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+          const title = (btn.getAttribute("title") || "").toLowerCase();
+          if (/apply|filter|search|submit/.test(ariaLabel) || /apply|filter|search|submit/.test(title)) {
+            applyBtn = btn;
+            break;
+          }
+        }
+      }
+
+      // Strategy 3: Submit button inside a form containing the filter inputs
+      if (!applyBtn) {
+        const filterForm = document.querySelector("form");
+        if (filterForm) {
+          applyBtn = filterForm.querySelector("button[type='submit'], input[type='submit']");
+        }
+      }
+
+      if (applyBtn) {
+        log(`Found Apply button: "${(applyBtn.textContent || "").trim()}" — clicking...`);
+        clickElement(applyBtn);
+        await delay(2000);
+      } else {
+        log("No explicit Apply button found — filters may auto-apply on selection");
+      }
+    }
+
+    // ── Step 5: Wait for table to update ──
     if (statusApplied || fundingApplied) {
       log("Filters applied — waiting for table to update...");
       await delay(3000);
@@ -730,6 +827,15 @@
           }
         }
 
+        // Get status if available
+        const statusText = getText(colIdx.status).toLowerCase();
+
+        // Skip non-active patients when status column is available
+        if (colIdx.status !== undefined && statusText && statusText !== "active") {
+          diagnostics.push(`Row ${r + 1}: ${fullName} — skipped (status="${statusText}")`);
+          continue;
+        }
+
         if (fullName && medicaidId) {
           patients.push({
             first_name: firstName,
@@ -738,7 +844,7 @@
             emr_funding_source: emrFundingSource || "",
           });
           if (patients.length <= 5 || patients.length % 25 === 0) {
-            log(`Row ${r + 1}: Name="${fullName}", Funding="${fundingText.substring(0, 60)}", ID=${medicaidId}, Source="${emrFundingSource}"`);
+            log(`Row ${r + 1}: Name="${fullName}", Funding="${fundingText.substring(0, 60)}", ID=${medicaidId}, Source="${emrFundingSource}", Status="${statusText || "n/a"}"`);
           }
         } else if (fullName) {
           diagnostics.push(`Row ${r + 1}: ${fullName} — no Medicaid ID found`);
@@ -754,6 +860,29 @@
     if (patients.length === 0) {
       log("No patients found in any table");
       if (diagnostics.length > 0) log(`Diagnostics: ${diagnostics.join("; ")}`);
+    }
+
+    // ── Client-side filtering fallback ──
+    // If the UI filters weren't applied (or even if they were), filter scraped
+    // patients by configured funding sources to ensure only relevant patients
+    // are included.
+    const allowedSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
+    if (patients.length > 0 && allowedSources.length > 0) {
+      const beforeFilter = patients.length;
+      const filtered = patients.filter((p) => {
+        if (!p.emr_funding_source) return false;
+        const src = p.emr_funding_source.toLowerCase();
+        return allowedSources.some((allowed) => src.includes(allowed.toLowerCase()));
+      });
+      if (filtered.length < beforeFilter) {
+        log(`Client-side filter: ${beforeFilter} → ${filtered.length} patients (filtered by ${allowedSources.length} configured funding sources)`);
+        const removedCount = beforeFilter - filtered.length;
+        diagnostics.push(`Client-side filter removed ${removedCount} patients with non-matching funding sources`);
+        patients.length = 0;
+        patients.push(...filtered);
+      } else {
+        log(`Client-side filter: all ${beforeFilter} patients matched configured funding sources`);
+      }
     }
 
     return { status: "OK", patients, diagnostics: diagnostics.join("; ") };
