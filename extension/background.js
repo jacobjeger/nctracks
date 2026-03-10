@@ -366,18 +366,39 @@ async function startLogin() {
 
     await ensureTab();
 
-    await chrome.tabs.update(state.tabId, { url: PROVIDER_PORTAL_LOGIN });
+    // Navigate and wait for the URL to actually change from about:blank
+    chrome.tabs.update(state.tabId, { url: PROVIDER_PORTAL_LOGIN });
+
+    // Wait for the tab to leave about:blank and start loading the real page
+    addLog("Waiting for login page to load...");
+    try {
+      await waitForTabUrl(
+        state.tabId,
+        (url) => url.includes("ncid.nc.gov") || url.includes("nctracks.nc.gov"),
+        TAB_LOAD_TIMEOUT_MS
+      );
+    } catch {
+      // URL test timed out — check what URL we actually landed on
+      const tab = await chrome.tabs.get(state.tabId);
+      addLog(`Page loaded at: ${tab.url}`);
+      if ((tab.url || "") === "about:blank" || (tab.url || "").startsWith("chrome://")) {
+        broadcastError("login_failed", "Login page failed to load. Check your internet connection.");
+        return;
+      }
+      // Might be on an intermediate redirect page — continue anyway
+    }
+
+    // Now wait for the page to fully load
     await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+    await delay(2000); // Let redirects and JS settle
 
-    // Wait for NCID redirect
-    await delay(3000);
-
-    // Verify we're on the right page
+    // Check current URL
     const tab = await chrome.tabs.get(state.tabId);
     const url = (tab.url || "").toLowerCase();
+    addLog(`Login page URL: ${tab.url}`);
 
     if (!url.includes("ncid.nc.gov") && !url.includes("nctracks.nc.gov")) {
-      addLog(`Unexpected URL after login navigation: ${tab.url}`);
+      addLog(`Unexpected URL: ${tab.url}`);
       broadcastError("login_failed", "Login page did not load correctly. Got unexpected URL.");
       return;
     }
@@ -399,6 +420,7 @@ async function startLogin() {
         username: state.credentials.username,
         password: state.credentials.password,
       });
+      addLog("Login credentials sent to page.");
     } catch (err) {
       addLog("Error communicating with login page: " + err.message);
 
