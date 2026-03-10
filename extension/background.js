@@ -649,30 +649,27 @@ async function processNextPatient() {
           medicaid_id: patient.medicaid_id,
           name: result.recipient_name || patientName,
           status: result.status || "UNKNOWN",
-          recipient_id: result.recipient_id || "",
           dob: result.dob || "",
-          aid_category: result.aid_category || "",
-          coverage_start: result.coverage_start || "",
-          coverage_end: result.coverage_end || "",
-          plan_name: result.plan_name || "",
-          county: result.county || "",
-          managed_care: result.managed_care || "",
-          copay: result.copay || "",
-          medicare: result.medicare || "",
-          tpl: result.tpl || "",
-          lock_in: result.lock_in || "",
-          address: result.address || "",
-          phone: result.phone || "",
           gender: result.gender || "",
-          race: result.race || "",
+          county: result.county || "",
+          benefit_plan: result.benefit_plan || "",
+          aid_category: result.aid_category || "",
+          coverage_dates: result.coverage_dates || "",
+          managing_entity: result.managing_entity || "",
+          managed_care_note: result.managed_care_note || "",
+          pcp_name: result.pcp_name || "",
+          pcp_phone: result.pcp_phone || "",
+          tailored_care_manager: result.tailored_care_manager || "",
+          tcm_phone: result.tcm_phone || "",
+          other_insurance: result.other_insurance || "",
+          medicare_a: result.medicare_a || "",
+          medicare_b: result.medicare_b || "",
+          hospice: result.hospice || "",
           checked_at: new Date().toISOString(),
           notes: result.notes || "",
-          raw_fields: result.raw_fields || {},
         });
 
-        const statusEmoji = (result.status || "").toUpperCase() === "ELIGIBLE" ? "ELIGIBLE" :
-          (result.status || "").toUpperCase() === "NOT ELIGIBLE" ? "NOT ELIGIBLE" : result.status;
-        addLog(`  Result: ${statusEmoji}${result.recipient_name ? " — " + result.recipient_name : ""}${result.plan_name ? " — Plan: " + result.plan_name : ""}${result.aid_category ? " — Aid: " + result.aid_category : ""}`);
+        addLog(`  Result: ${result.status} — ${result.recipient_name || ""}${result.benefit_plan ? " | Plan: " + result.benefit_plan : ""}${result.coverage_dates ? " | " + result.coverage_dates : ""}${result.managing_entity ? " | " + result.managing_entity : ""}`);
         succeeded = true;
         break;
       } catch (err) {

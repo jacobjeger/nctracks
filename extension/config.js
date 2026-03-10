@@ -149,10 +149,11 @@ const NCTRACKS_CONFIG = {
 
   // Output columns
   OUTPUT_COLUMNS: [
-    "Medicaid ID", "Name", "Status", "DOB", "Aid Category",
-    "Coverage Start", "Coverage End", "Plan Name", "Managed Care/MCO",
-    "County", "Copay", "Medicare", "TPL", "Lock-In",
-    "Gender", "Address", "Phone", "Checked At", "Notes",
+    "Medicaid ID", "Name", "Status", "DOB", "Gender", "County",
+    "Benefit Plan", "Category of Eligibility", "Dates of Enrollment",
+    "Managing Entity", "Managed Care", "PCP Name", "PCP Phone",
+    "Tailored Care Manager", "TCM Phone", "Other Insurance",
+    "Medicare Part A", "Medicare Part B", "Hospice", "Checked At", "Notes",
   ],
 };
 

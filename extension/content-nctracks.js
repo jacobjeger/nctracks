@@ -159,6 +159,117 @@
 
   // ─── Result Scraping ───
 
+  // Helper: scan all td pairs on the page for label:value patterns
+  function scrapeLabelValuePairs() {
+    const pairs = {};
+    const allTds = document.querySelectorAll("td");
+    for (let i = 0; i < allTds.length; i++) {
+      const cell = allTds[i];
+      const raw = (cell.textContent || "").trim();
+      // Labels end with ":" and are reasonably short
+      if (!raw.endsWith(":") || raw.length > 80) continue;
+      const label = raw.replace(/:$/, "").trim();
+      if (!label) continue;
+      const nextTd = allTds[i + 1];
+      if (!nextTd) continue;
+      const value = (nextTd.textContent || "").trim();
+      if (value && value !== label) {
+        pairs[label] = value;
+      }
+    }
+    return pairs;
+  }
+
+  // Helper: scrape the Health Plan: Medicaid table rows
+  // Structure: header row (Benefit Plan | Category of Eligibility | Dates of Enrollment | Managing Entity | Address | Residential County Code | ...)
+  // followed by data rows
+  function scrapeHealthPlanTable() {
+    const plans = [];
+    const tables = document.querySelectorAll("table");
+    for (const table of tables) {
+      const headerRow = table.querySelector("tr");
+      if (!headerRow) continue;
+      const headers = Array.from(headerRow.querySelectorAll("td, th")).map((c) => c.textContent.trim().toUpperCase());
+      // Check if this looks like a Health Plan table
+      const hasBenefitPlan = headers.some((h) => h.includes("BENEFIT PLAN"));
+      const hasDatesOfEnrollment = headers.some((h) => h.includes("DATES OF ENROLLMENT") || h.includes("DATES OF ENROLLMENT"));
+      if (!hasBenefitPlan) continue;
+
+      // Find column indices
+      const colIdx = {};
+      headers.forEach((h, idx) => {
+        if (h.includes("BENEFIT PLAN")) colIdx.benefit_plan = idx;
+        if (h.includes("CATEGORY") && h.includes("ELIGIBILITY")) colIdx.category = idx;
+        if (h.includes("DATES") && h.includes("ENROLLMENT")) colIdx.dates = idx;
+        if (h.includes("MANAGING ENTITY")) colIdx.managing_entity = idx;
+        if (h.includes("ADDRESS")) colIdx.address = idx;
+        if (h.includes("RESIDENTIAL") || h.includes("COUNTY CODE")) colIdx.county = idx;
+        if (h.includes("DAYTIME PHONE")) colIdx.daytime_phone = idx;
+        if (h.includes("AFTER HOURS")) colIdx.after_hours_phone = idx;
+      });
+
+      // Parse data rows
+      const rows = table.querySelectorAll("tr");
+      for (let r = 1; r < rows.length; r++) {
+        const cells = rows[r].querySelectorAll("td");
+        if (cells.length < 3) continue;
+        const getText = (idx) => idx !== undefined && cells[idx] ? cells[idx].textContent.trim() : "";
+        const plan = {
+          benefit_plan: getText(colIdx.benefit_plan),
+          category: getText(colIdx.category),
+          dates: getText(colIdx.dates),
+          managing_entity: getText(colIdx.managing_entity),
+          address: getText(colIdx.address),
+          county: getText(colIdx.county),
+          daytime_phone: getText(colIdx.daytime_phone),
+        };
+        // Only include rows that have actual data
+        if (plan.benefit_plan && !plan.benefit_plan.toUpperCase().includes("BENEFIT PLAN")) {
+          plans.push(plan);
+        }
+      }
+    }
+    return plans;
+  }
+
+  // Helper: scrape Other Insurance table
+  function scrapeOtherInsurance() {
+    const insurance = [];
+    const tables = document.querySelectorAll("table");
+    for (const table of tables) {
+      const headerRow = table.querySelector("tr");
+      if (!headerRow) continue;
+      const headers = Array.from(headerRow.querySelectorAll("td, th")).map((c) => c.textContent.trim().toUpperCase());
+      if (!headers.some((h) => h.includes("COMPANY NAME"))) continue;
+
+      const colIdx = {};
+      headers.forEach((h, idx) => {
+        if (h.includes("TYPE")) colIdx.type = idx;
+        if (h.includes("COMPANY NAME")) colIdx.company = idx;
+        if (h.includes("COMPANY PHONE")) colIdx.phone = idx;
+        if (h.includes("POLICYHOLDER")) colIdx.policyholder = idx;
+        if (h.includes("POLICY")) colIdx.policy = idx;
+        if (h.includes("COVERAGE DATE")) colIdx.dates = idx;
+      });
+
+      const rows = table.querySelectorAll("tr");
+      for (let r = 1; r < rows.length; r++) {
+        const cells = rows[r].querySelectorAll("td");
+        if (cells.length < 2) continue;
+        const getText = (idx) => idx !== undefined && cells[idx] ? cells[idx].textContent.trim() : "";
+        const entry = {
+          company: getText(colIdx.company),
+          phone: getText(colIdx.phone),
+          policyholder: getText(colIdx.policyholder),
+          policy: getText(colIdx.policy),
+          dates: getText(colIdx.dates),
+        };
+        if (entry.company) insurance.push(entry);
+      }
+    }
+    return insurance;
+  }
+
   function scrapeResults() {
     const pageText = (document.body.innerText || "").toUpperCase();
     const result = {
@@ -166,44 +277,44 @@
       recipient_name: "",
       recipient_id: "",
       dob: "",
-      aid_category: "",
-      coverage_start: "",
-      coverage_end: "",
-      plan_name: "",
-      county: "",
-      address: "",
-      phone: "",
       gender: "",
-      race: "",
-      managed_care: "",
-      copay: "",
-      medicare: "",
-      tpl: "",
-      lock_in: "",
+      county: "",
+      benefit_plan: "",
+      aid_category: "",
+      coverage_dates: "",
+      managing_entity: "",
+      managed_care_note: "",
+      pcp_name: "",
+      pcp_phone: "",
+      pcp_address: "",
+      tailored_care_manager: "",
+      tcm_phone: "",
+      other_insurance: "",
+      medicare_a: "",
+      medicare_b: "",
+      hospice: "",
+      tribal_member: "",
       notes: "",
-      raw_fields: {},  // All label-value pairs found on page
+      raw_fields: {},
     };
 
-    // Check for error pages first
+    // Check for error/system pages first
     if (isErrorPage()) {
       result.status = "ERROR";
       result.notes = "NCTracks returned a system error page";
       return result;
     }
 
-    // Check for error messages (like "Invalid Recipient Id")
+    // Check for error summary (like "Invalid Recipient Id")
     try {
-      const errorSummary = document.querySelector(".error, .errorMessage, [class*='error' i]");
-      if (errorSummary) {
-        const errText = errorSummary.textContent.trim();
-        if (errText && errText.length < 500) {
-          result.notes = errText;
-        }
-      }
-      // Also check for list items in error summaries
-      const errorItems = document.querySelectorAll("li a[href*='error'], .error li, ul.error li");
-      if (errorItems.length > 0) {
-        result.notes = Array.from(errorItems).map((li) => li.textContent.trim()).join("; ");
+      const errorItems = document.querySelectorAll("li a, .error li");
+      const errors = Array.from(errorItems)
+        .map((el) => el.textContent.trim())
+        .filter((t) => t.toLowerCase().includes("invalid") || t.toLowerCase().includes("error") || t.toLowerCase().includes("required"));
+      if (errors.length > 0) {
+        result.status = "ERROR";
+        result.notes = errors.join("; ");
+        return result;
       }
     } catch { /* ignore */ }
 
@@ -211,114 +322,83 @@
     for (const phrase of CFG.NOT_FOUND_PHRASES) {
       if (pageText.includes(phrase)) {
         result.status = "NOT FOUND";
-        if (!result.notes) result.notes = "Patient not found in system";
+        result.notes = "Patient not found in system";
         return result;
       }
     }
 
-    // ── Comprehensive table scraper ──
-    // Scan all table cells for label-value pairs (NCTracks uses table-based layout)
-    try {
-      const allTds = document.querySelectorAll("td");
-      for (let i = 0; i < allTds.length; i++) {
-        const cell = allTds[i];
-        const cellText = (cell.textContent || "").trim();
-        const cellUpper = cellText.toUpperCase();
+    // ── Scrape label:value pairs from the page ──
+    const pairs = scrapeLabelValuePairs();
+    result.raw_fields = pairs;
 
-        // Skip empty cells and very long cells (likely data blocks, not labels)
-        if (!cellText || cellText.length > 60) continue;
+    // "About the Recipient" section
+    result.recipient_name = pairs["Name"] || "";
+    result.dob = pairs["Date of Birth"] || "";
+    result.gender = pairs["Gender"] || "";
+    result.recipient_id = pairs["Recipient ID"] || "";
+    result.tribal_member = pairs["Tribal Member"] || "";
 
-        // Look for the next sibling td as value
-        const nextTd = allTds[i + 1];
-        if (!nextTd) continue;
-        const nextText = (nextTd.textContent || "").trim();
-        if (!nextText || nextText === "N/A") continue;
+    // Admin County Code
+    result.county = pairs["Admin County Code"] || "";
 
-        // Store every label-value pair we find
-        if (cellText.includes(":") || cellUpper.match(/^[A-Z\s\/]+$/)) {
-          const label = cellText.replace(/:$/, "").trim();
-          if (label && nextText && label !== nextText) {
-            result.raw_fields[label] = nextText;
-          }
-        }
+    // Primary Care Provider
+    result.pcp_name = pairs["Primary Care Provider"] || "";
+    result.pcp_phone = pairs["Daytime Phone"] || "";
+    result.pcp_address = pairs["Address"] || "";
 
-        // Map specific labels to result fields
-        if (cellUpper.includes("RECIPIENT NAME") || cellUpper === "NAME") {
-          if (!result.recipient_name) result.recipient_name = nextText;
-        }
-        if (cellUpper.includes("RECIPIENT") && cellUpper.includes("ID") && !cellUpper.includes("NAME")) {
-          if (!result.recipient_id) result.recipient_id = nextText;
-        }
-        if (cellUpper.includes("DATE OF BIRTH") || cellUpper === "DOB") {
-          if (!result.dob) result.dob = nextText;
-        }
-        if (cellUpper.includes("AID") && cellUpper.includes("CATEG")) {
-          if (!result.aid_category) result.aid_category = nextText;
-        }
-        if (cellUpper.includes("COVERAGE") && cellUpper.includes("START") || cellUpper.includes("BEGIN") && cellUpper.includes("DATE")) {
-          if (!result.coverage_start) result.coverage_start = nextText;
-        }
-        if (cellUpper.includes("COVERAGE") && cellUpper.includes("END") || cellUpper.includes("TERMINATION") && cellUpper.includes("DATE")) {
-          if (!result.coverage_end) result.coverage_end = nextText;
-        }
-        if (cellUpper.includes("START") && !cellUpper.includes("COVERAGE") && !result.coverage_start) {
-          result.coverage_start = nextText;
-        }
-        if ((cellUpper.includes("END") || cellUpper.includes("TERMINATION")) && !cellUpper.includes("COVERAGE") && !result.coverage_end) {
-          result.coverage_end = nextText;
-        }
-        if (cellUpper.includes("PLAN") && !cellUpper.includes("COPAY")) {
-          if (!result.plan_name) result.plan_name = nextText;
-        }
-        if (cellUpper.includes("COUNTY")) {
-          if (!result.county) result.county = nextText;
-        }
-        if (cellUpper.includes("ADDRESS")) {
-          if (!result.address) result.address = nextText;
-        }
-        if (cellUpper.includes("PHONE") || cellUpper.includes("TELEPHONE")) {
-          if (!result.phone) result.phone = nextText;
-        }
-        if (cellUpper === "GENDER" || cellUpper === "SEX") {
-          if (!result.gender) result.gender = nextText;
-        }
-        if (cellUpper === "RACE") {
-          if (!result.race) result.race = nextText;
-        }
-        if (cellUpper.includes("MANAGED CARE") || cellUpper.includes("MCO") || cellUpper.includes("HEALTH PLAN")) {
-          if (!result.managed_care) result.managed_care = nextText;
-        }
-        if (cellUpper.includes("COPAY") || cellUpper.includes("CO-PAY")) {
-          if (!result.copay) result.copay = nextText;
-        }
-        if (cellUpper.includes("MEDICARE")) {
-          if (!result.medicare) result.medicare = nextText;
-        }
-        if (cellUpper.includes("TPL") || cellUpper.includes("THIRD PARTY")) {
-          if (!result.tpl) result.tpl = nextText;
-        }
-        if (cellUpper.includes("LOCK") && cellUpper.includes("IN")) {
-          if (!result.lock_in) result.lock_in = nextText;
-        }
+    // Tailored Care Manager
+    result.tailored_care_manager = pairs["Tailored Care Manager"] || "";
+    // TCM phone — the second "Daytime Phone" on the page; handled below
+
+    // Medicare
+    result.medicare_a = pairs["Part A Eligible"] || "";
+    result.medicare_b = pairs["Part B Eligible"] || "";
+
+    // Hospice
+    result.hospice = pairs["Hospice Indicator"] || "";
+
+    // ── Scrape Health Plan tables ──
+    const plans = scrapeHealthPlanTable();
+    if (plans.length > 0) {
+      // Use the first Medicaid plan as primary
+      const primary = plans[0];
+      result.benefit_plan = primary.benefit_plan;
+      result.aid_category = primary.category;
+      result.coverage_dates = primary.dates;
+      result.managing_entity = primary.managing_entity;
+      if (!result.county && primary.county) result.county = primary.county;
+
+      // If there are multiple plans, list them all
+      if (plans.length > 1) {
+        result.notes = plans.map((p) =>
+          `${p.benefit_plan} (${p.category}) ${p.dates} - ${p.managing_entity}`
+        ).join(" | ");
       }
-    } catch (err) {
-      logError("scrapeResults table scan", err);
     }
 
-    // Also try span selectors
-    try {
-      const startSpan = document.querySelector('span[id*="startDate"], span[id*="StartDate"]');
-      if (startSpan && !result.coverage_start) result.coverage_start = startSpan.textContent.trim();
-      const endSpan = document.querySelector('span[id*="endDate"], span[id*="EndDate"]');
-      if (endSpan && !result.coverage_end) result.coverage_end = endSpan.textContent.trim();
-      const planSpan = document.querySelector('span[id*="planName"], span[id*="PlanName"]');
-      if (planSpan && !result.plan_name) result.plan_name = planSpan.textContent.trim();
-    } catch (err) {
-      logError("scrapeResults span scan", err);
+    // ── Managed Care note ──
+    if (pageText.includes("ENROLLED IN MANAGED CARE")) {
+      result.managed_care_note = "Enrolled in Managed Care";
     }
 
-    // Determine eligibility status — check most specific first
-    if (pageText.includes("NOT ELIGIBLE") || pageText.includes("INELIGIBLE")) {
+    // ── Other Insurance ──
+    const insurance = scrapeOtherInsurance();
+    if (insurance.length > 0) {
+      result.other_insurance = insurance.map((ins) =>
+        `${ins.company}${ins.policy ? " (Policy: " + ins.policy + ")" : ""}${ins.dates ? " " + ins.dates : ""}`
+      ).join("; ");
+    }
+
+    // ── Determine eligibility status ──
+    // If they have enrollment dates in a Health Plan table, they're enrolled
+    if (result.coverage_dates) {
+      // Check if the managed care message says "not eligible for payment"
+      if (pageText.includes("ENROLLED IN MANAGED CARE") && pageText.includes("NOT ELIGIBLE FOR PAYMENT")) {
+        result.status = "MANAGED CARE";
+      } else {
+        result.status = "ELIGIBLE";
+      }
+    } else if (pageText.includes("NOT ELIGIBLE") || pageText.includes("INELIGIBLE")) {
       result.status = "NOT ELIGIBLE";
     } else if (pageText.includes("ELIGIBLE")) {
       result.status = "ELIGIBLE";
@@ -339,16 +419,24 @@
         `Could not determine status. Page: "${diag.title}", ${diag.bodyLength} chars`;
     }
 
-    // Log raw fields for debugging
-    const fieldCount = Object.keys(result.raw_fields).length;
-    if (fieldCount > 0) {
-      try {
-        chrome.runtime.sendMessage({
-          event: "contentScriptLog",
-          message: `Scraped ${fieldCount} fields: ${JSON.stringify(result.raw_fields)}`,
-        });
-      } catch { /* ignore */ }
-    }
+    // Log key scraped data for debugging
+    try {
+      const summary = [
+        `Name: ${result.recipient_name}`,
+        `DOB: ${result.dob}`,
+        `County: ${result.county}`,
+        `Plan: ${result.benefit_plan}`,
+        `Category: ${result.aid_category}`,
+        `Dates: ${result.coverage_dates}`,
+        `Entity: ${result.managing_entity}`,
+        `PCP: ${result.pcp_name}`,
+        `Other Ins: ${result.other_insurance || "none"}`,
+      ].join(", ");
+      chrome.runtime.sendMessage({
+        event: "contentScriptLog",
+        message: `Scraped: ${summary}`,
+      });
+    } catch { /* ignore */ }
 
     return result;
   }

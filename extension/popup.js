@@ -1079,40 +1079,23 @@
     try {
       const wb = XLSX.utils.book_new();
       const headers = [
-        "Medicaid ID", "Name", "Status", "DOB", "Aid Category",
-        "Coverage Start", "Coverage End", "Plan Name", "Managed Care/MCO",
-        "County", "Copay", "Medicare", "TPL", "Lock-In",
-        "Gender", "Address", "Phone", "Checked At", "Notes",
+        "Medicaid ID", "Name", "Status", "DOB", "Gender", "County",
+        "Benefit Plan", "Category of Eligibility", "Dates of Enrollment",
+        "Managing Entity", "Managed Care", "PCP Name", "PCP Phone",
+        "Tailored Care Manager", "TCM Phone", "Other Insurance",
+        "Medicare Part A", "Medicare Part B", "Hospice",
+        "Checked At", "Notes",
       ];
 
       const wsData = [headers];
       for (const r of currentResults) {
-        // Build notes: include any raw fields not already in named columns
-        let notes = r.notes || "";
-        if (r.raw_fields && Object.keys(r.raw_fields).length > 0) {
-          const extraFields = Object.entries(r.raw_fields)
-            .filter(([k]) => {
-              const ku = k.toUpperCase();
-              return !ku.includes("NAME") && !ku.includes("DOB") && !ku.includes("BIRTH") &&
-                !ku.includes("AID") && !ku.includes("COVERAGE") && !ku.includes("START") &&
-                !ku.includes("END") && !ku.includes("PLAN") && !ku.includes("COUNTY") &&
-                !ku.includes("COPAY") && !ku.includes("MEDICARE") && !ku.includes("TPL") &&
-                !ku.includes("LOCK") && !ku.includes("GENDER") && !ku.includes("SEX") &&
-                !ku.includes("ADDRESS") && !ku.includes("PHONE") && !ku.includes("MANAGED") &&
-                !ku.includes("MCO") && !ku.includes("RECIPIENT") && !ku.includes("RACE");
-            })
-            .map(([k, v]) => `${k}: ${v}`)
-            .join("; ");
-          if (extraFields) {
-            notes = notes ? notes + " | " + extraFields : extraFields;
-          }
-        }
-
         wsData.push([
-          r.medicaid_id, r.name, r.status, r.dob || "", r.aid_category || "",
-          r.coverage_start, r.coverage_end, r.plan_name, r.managed_care || "",
-          r.county || "", r.copay || "", r.medicare || "", r.tpl || "", r.lock_in || "",
-          r.gender || "", r.address || "", r.phone || "", r.checked_at, notes,
+          r.medicaid_id, r.name, r.status, r.dob || "", r.gender || "", r.county || "",
+          r.benefit_plan || "", r.aid_category || "", r.coverage_dates || "",
+          r.managing_entity || "", r.managed_care_note || "", r.pcp_name || "", r.pcp_phone || "",
+          r.tailored_care_manager || "", r.tcm_phone || "", r.other_insurance || "",
+          r.medicare_a || "", r.medicare_b || "", r.hospice || "",
+          r.checked_at, r.notes || "",
         ]);
       }
 
@@ -1135,7 +1118,7 @@
         const statusCell = ws[XLSX.utils.encode_cell({ r, c: 2 })];
         if (statusCell) {
           const val = (statusCell.v || "").toUpperCase();
-          if (val === "ELIGIBLE" || val === "ACTIVE") {
+          if (val === "ELIGIBLE" || val === "ACTIVE" || val === "MANAGED CARE") {
             statusCell.s = { fill: { fgColor: { rgb: "DCFCE7" } }, font: { color: { rgb: "166534" } } };
           } else if (val === "NOT ELIGIBLE" || val === "TERMINATED" || val === "ERROR") {
             statusCell.s = { fill: { fgColor: { rgb: "FEE2E2" } }, font: { color: { rgb: "991B1B" } } };
@@ -1146,10 +1129,27 @@
       }
 
       ws["!cols"] = [
-        { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 12 }, { wch: 16 },
-        { wch: 14 }, { wch: 14 }, { wch: 25 }, { wch: 25 },
-        { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 10 },
-        { wch: 8 }, { wch: 30 }, { wch: 14 }, { wch: 22 }, { wch: 40 },
+        { wch: 14 },  // Medicaid ID
+        { wch: 22 },  // Name
+        { wch: 16 },  // Status
+        { wch: 12 },  // DOB
+        { wch: 8 },   // Gender
+        { wch: 16 },  // County
+        { wch: 40 },  // Benefit Plan
+        { wch: 18 },  // Category of Eligibility
+        { wch: 26 },  // Dates of Enrollment
+        { wch: 30 },  // Managing Entity
+        { wch: 22 },  // Managed Care
+        { wch: 30 },  // PCP Name
+        { wch: 14 },  // PCP Phone
+        { wch: 30 },  // Tailored Care Manager
+        { wch: 14 },  // TCM Phone
+        { wch: 40 },  // Other Insurance
+        { wch: 8 },   // Medicare A
+        { wch: 8 },   // Medicare B
+        { wch: 8 },   // Hospice
+        { wch: 22 },  // Checked At
+        { wch: 50 },  // Notes
       ];
 
       XLSX.utils.book_append_sheet(wb, ws, "Eligibility Results");
