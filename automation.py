@@ -669,13 +669,21 @@ class NCTracksAutomation:
                 page_text = ""
             is_mfa = any(phrase in page_text for phrase in config.MFA_PAGE_PHRASES)
 
+        # Still on NCID after credentials — open visible browser so user can
+        # complete MFA (or any other interactive step) even if we didn't
+        # recognise specific MFA phrases on the page.
+        self._show_browser()
         if is_mfa:
-            self._show_browser()
             self.on_status(
                 "MFA REQUIRED: Please complete multi-factor authentication "
                 "in the browser window. Waiting..."
             )
-            self.on_mfa_required()
+        else:
+            self.on_status(
+                "Waiting for login to complete — a browser window has been "
+                "opened. Please complete any prompts. Waiting..."
+            )
+        self.on_mfa_required()
 
         # Poll the MFA browser (visible) for completion
         poll_page = self._mfa_page if self._mfa_page else self.page
