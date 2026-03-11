@@ -86,11 +86,7 @@ pyinstaller \
     --hidden-import "playwright.sync_api" \
     --hidden-import "playwright._impl" \
     --hidden-import "openpyxl" \
-    --hidden-import "keyring" \
-    --hidden-import "keyring.backends" \
-    --hidden-import "keyring.backends.macOS" \
     --collect-all "playwright" \
-    --collect-all "keyring" \
     --osx-bundle-identifier "com.nctracks.verifier" \
     main.py
 

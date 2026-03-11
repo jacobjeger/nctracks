@@ -9,9 +9,28 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 from datetime import datetime
 import logging
 
-import keyring
+import json
+import base64
 
 import config
+
+# ─── Simple local credential storage (replaces macOS Keychain) ───
+_CREDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".credentials.json")
+
+
+def _load_creds() -> dict:
+    try:
+        with open(_CREDS_FILE, "r") as f:
+            raw = json.load(f)
+        return {k: base64.b64decode(v).decode() for k, v in raw.items()}
+    except Exception:
+        return {}
+
+
+def _save_creds(data: dict):
+    encoded = {k: base64.b64encode(v.encode()).decode() for k, v in data.items()}
+    with open(_CREDS_FILE, "w") as f:
+        json.dump(encoded, f)
 from data import load_patients, save_results, generate_output_path, generate_template
 from automation import NCTracksAutomation
 from emr import PassageHealthScraper
@@ -351,41 +370,33 @@ class NCTracksVerifierApp:
                 self.patient_count_var.set("No file loaded")
 
     def _load_saved_credentials(self):
-        """Load saved credentials from keyring."""
+        """Load saved credentials from local file."""
         try:
-            username = keyring.get_password(config.KEYRING_SERVICE, "username")
-            password = keyring.get_password(config.KEYRING_SERVICE, "password")
-            emr_email = keyring.get_password(config.KEYRING_SERVICE, "emr_email")
-            emr_password = keyring.get_password(config.KEYRING_SERVICE, "emr_password")
-            if username:
-                self.username_var.set(username)
-            if password:
-                self.password_var.set(password)
-            if emr_email:
-                self.emr_email_var.set(emr_email)
-            if emr_password:
-                self.emr_password_var.set(emr_password)
+            creds = _load_creds()
+            if creds.get("username"):
+                self.username_var.set(creds["username"])
+            if creds.get("password"):
+                self.password_var.set(creds["password"])
+            if creds.get("emr_email"):
+                self.emr_email_var.set(creds["emr_email"])
+            if creds.get("emr_password"):
+                self.emr_password_var.set(creds["emr_password"])
         except Exception as e:
             logger.debug(f"Could not load saved credentials: {e}")
 
     def _save_credentials(self):
-        """Save credentials to keyring."""
-        if self.save_creds_var.get():
-            try:
-                keyring.set_password(config.KEYRING_SERVICE, "username",
-                                     self.username_var.get())
-                keyring.set_password(config.KEYRING_SERVICE, "password",
-                                     self.password_var.get())
-            except Exception as e:
-                logger.warning(f"Could not save NCTracks credentials: {e}")
-        if self.save_emr_creds_var.get():
-            try:
-                keyring.set_password(config.KEYRING_SERVICE, "emr_email",
-                                     self.emr_email_var.get())
-                keyring.set_password(config.KEYRING_SERVICE, "emr_password",
-                                     self.emr_password_var.get())
-            except Exception as e:
-                logger.warning(f"Could not save EMR credentials: {e}")
+        """Save credentials to local file."""
+        creds = _load_creds()
+        try:
+            if self.save_creds_var.get():
+                creds["username"] = self.username_var.get()
+                creds["password"] = self.password_var.get()
+            if self.save_emr_creds_var.get():
+                creds["emr_email"] = self.emr_email_var.get()
+                creds["emr_password"] = self.emr_password_var.get()
+            _save_creds(creds)
+        except Exception as e:
+            logger.warning(f"Could not save credentials: {e}")
 
     def _browse_file(self):
         """Open file dialog to select patient list."""

@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 nctracks_verifier.log
 *.xlsx
+.credentials.json

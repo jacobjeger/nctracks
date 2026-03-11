@@ -30,7 +30,7 @@ def _ensure_dependencies():
     if getattr(sys, 'frozen', False):
         return
 
-    required = ["playwright", "openpyxl", "keyring"]
+    required = ["playwright", "openpyxl"]
     missing = []
     for pkg in required:
         try:
