@@ -58,8 +58,8 @@ RETRY_DELAY_SECONDS = 5
 SESSION_TIMEOUT_MINUTES = 15
 
 # ─── Browser settings ───
-HEADLESS = False  # Must be False for MFA; browser starts minimized
-SLOW_MO = 500
+HEADLESS = False  # Must be False for MFA; browser starts off-screen
+SLOW_MO = 100
 
 # ─── Credential storage ───
 KEYRING_SERVICE = "nctracks-verifier"

@@ -378,15 +378,30 @@ class NCTracksAutomation:
         self._stop_requested = True
 
     def start_browser(self):
-        """Launch the browser (minimized — shown only when MFA is needed)."""
+        """Launch the browser (off-screen — shown only when MFA is needed)."""
         self.on_status("Launching browser...")
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(
-            channel="chrome",
-            headless=config.HEADLESS,
-            slow_mo=config.SLOW_MO,
-            args=["--window-position=-9999,-9999"],
-        )
+
+        launch_args = ["--window-position=-9999,-9999", "--no-first-run",
+                       "--no-default-browser-check"]
+
+        # Try system Chrome first, fall back to bundled Chromium
+        try:
+            self.on_status("Launching Chrome...")
+            self.browser = self.playwright.chromium.launch(
+                channel="chrome",
+                headless=config.HEADLESS,
+                slow_mo=config.SLOW_MO,
+                args=launch_args,
+            )
+        except Exception as e:
+            logger.warning(f"System Chrome failed ({e}), trying bundled Chromium...")
+            self.on_status("Chrome not found, trying Chromium...")
+            self.browser = self.playwright.chromium.launch(
+                headless=config.HEADLESS,
+                slow_mo=config.SLOW_MO,
+                args=launch_args,
+            )
         self.context = self.browser.new_context(
             viewport={"width": 1280, "height": 900},
             user_agent=(
