@@ -58,7 +58,7 @@ RETRY_DELAY_SECONDS = 5
 SESSION_TIMEOUT_MINUTES = 15
 
 # ─── Browser settings ───
-HEADLESS = False  # Visible so user can handle MFA
+HEADLESS = False  # Must be False for MFA; browser starts minimized
 SLOW_MO = 500
 
 # ─── Credential storage ───

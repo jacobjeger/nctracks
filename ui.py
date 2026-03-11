@@ -141,6 +141,12 @@ class NCTracksVerifierApp:
                                     command=self._test_login)
         self.test_btn.pack(side=tk.LEFT, padx=(10, 0))
 
+        self.show_browser_btn = ttk.Button(
+            btn_frame, text="Show Browser",
+            command=self._toggle_browser, state=tk.DISABLED,
+        )
+        self.show_browser_btn.pack(side=tk.LEFT, padx=(10, 0))
+
         # === Progress ===
         progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding=8)
         progress_frame.pack(fill=tk.X, pady=(0, 8))
@@ -320,6 +326,19 @@ class NCTracksVerifierApp:
             except Exception:
                 pass
 
+    def _toggle_browser(self):
+        """Show or hide the browser window on demand."""
+        if not self.automation:
+            return
+        if getattr(self, "_browser_visible", False):
+            self.automation._hide_browser()
+            self.show_browser_btn.config(text="Show Browser")
+            self._browser_visible = False
+        else:
+            self.automation._show_browser()
+            self.show_browser_btn.config(text="Hide Browser")
+            self._browser_visible = True
+
     def _set_running(self, running: bool):
         """Toggle UI state between running and idle."""
         state = tk.DISABLED if running else tk.NORMAL
@@ -327,6 +346,7 @@ class NCTracksVerifierApp:
         self.test_btn.config(state=state)
         self.stop_btn.config(state=tk.NORMAL if running else tk.DISABLED)
         self.abort_btn.config(state=tk.NORMAL if running else tk.DISABLED)
+        self.show_browser_btn.config(state=tk.NORMAL if running else tk.DISABLED)
         self.emr_email_entry.config(state=state)
         self.emr_password_entry.config(state=state)
         self.username_entry.config(state=state)

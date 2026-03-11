@@ -378,13 +378,14 @@ class NCTracksAutomation:
         self._stop_requested = True
 
     def start_browser(self):
-        """Launch the browser."""
+        """Launch the browser (minimized — shown only when MFA is needed)."""
         self.on_status("Launching browser...")
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(
             channel="chrome",
             headless=config.HEADLESS,
             slow_mo=config.SLOW_MO,
+            args=["--window-position=-9999,-9999"],
         )
         self.context = self.browser.new_context(
             viewport={"width": 1280, "height": 900},
@@ -397,6 +398,37 @@ class NCTracksAutomation:
         self.page = self.context.new_page()
         self.page.set_default_timeout(config.ELEMENT_TIMEOUT)
         self.page.set_default_navigation_timeout(config.NAVIGATION_TIMEOUT)
+
+    def _show_browser(self):
+        """Bring the browser window to the foreground for MFA/CAPTCHA."""
+        try:
+            if self.page:
+                cdp = self.context.new_cdp_session(self.page)
+                # Get the window, move it on-screen and activate it
+                result = cdp.send("Browser.getWindowForTarget")
+                window_id = result["windowId"]
+                cdp.send("Browser.setWindowBounds", {
+                    "windowId": window_id,
+                    "bounds": {"left": 100, "top": 100, "windowState": "normal"},
+                })
+                cdp.detach()
+        except Exception as e:
+            logger.debug(f"Could not reposition browser window: {e}")
+
+    def _hide_browser(self):
+        """Move the browser window back off-screen."""
+        try:
+            if self.page:
+                cdp = self.context.new_cdp_session(self.page)
+                result = cdp.send("Browser.getWindowForTarget")
+                window_id = result["windowId"]
+                cdp.send("Browser.setWindowBounds", {
+                    "windowId": window_id,
+                    "bounds": {"left": -9999, "top": -9999, "windowState": "normal"},
+                })
+                cdp.detach()
+        except Exception as e:
+            logger.debug(f"Could not hide browser window: {e}")
 
     def close(self):
         """Clean up browser resources."""
@@ -590,6 +622,7 @@ class NCTracksAutomation:
             is_mfa = any(phrase in page_text for phrase in config.MFA_PAGE_PHRASES)
 
         if is_mfa:
+            self._show_browser()
             self.on_status(
                 "MFA REQUIRED: Please complete multi-factor authentication "
                 "in the browser window. Waiting..."
@@ -605,6 +638,7 @@ class NCTracksAutomation:
             if (config.NCID_LOGIN_BASE not in current_url
                     and "ncid.nc.gov" not in current_url):
                 self.on_status("MFA completed, loading portal...")
+                self._hide_browser()
                 return
             time.sleep(2)
 
@@ -718,9 +752,11 @@ class NCTracksAutomation:
                     self.navigate_to_eligibility()
 
                 if self._detect_captcha():
+                    self._show_browser()
                     self.on_status("CAPTCHA detected! Please solve it in the browser.")
                     self.on_captcha_detected()
                     self._wait_for_captcha_resolution()
+                    self._hide_browser()
 
                 # Fill form and submit
                 self._fill_patient_search(patient)
