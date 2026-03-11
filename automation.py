@@ -382,6 +382,7 @@ class NCTracksAutomation:
         self.on_status("Launching browser...")
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(
+            channel="chrome",
             headless=config.HEADLESS,
             slow_mo=config.SLOW_MO,
         )

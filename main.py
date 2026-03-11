@@ -35,17 +35,17 @@ def _ensure_dependencies():
             stderr=subprocess.DEVNULL,
         )
 
-    # Check if Playwright browsers are installed
+    # Install Playwright browser deps (uses system Chrome via channel="chrome")
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             p.chromium.executable_path
     except Exception:
-        print("First run — installing browser (one-time, may take a minute)...")
+        print("First run — installing Playwright deps (one-time)...")
         subprocess.check_call(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
+            [sys.executable, "-m", "playwright", "install-deps", "chromium"],
         )
-        print("Browser installed!")
+        print("Playwright deps installed!")
 
 
 def main():
