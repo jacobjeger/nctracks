@@ -146,16 +146,23 @@ function updateBadge() {
 
 function showNotification(title, message, options = {}) {
   try {
+    const notifId = "nctracks_" + Date.now();
     const notifOptions = {
       type: "basic",
       iconUrl: "icons/icon128.png",
       title,
       message,
+      priority: 2,
+      requireInteraction: false,
       ...options,
     };
-    chrome.notifications.create(notifOptions);
-  } catch {
-    // notifications may not be available
+    chrome.notifications.create(notifId, notifOptions, (id) => {
+      if (chrome.runtime.lastError) {
+        console.warn("Notification failed:", chrome.runtime.lastError.message);
+      }
+    });
+  } catch (err) {
+    console.warn("Notification error:", err);
   }
 }
 

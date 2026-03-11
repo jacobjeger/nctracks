@@ -89,6 +89,7 @@
 
   initCollapsibleSections();
   loadSavedData();
+  loadLastReport();
   reconnectToState();
 
   // ─── Collapsible Sections ───
@@ -146,6 +147,24 @@
       if (data.savedGroup) groupInput.value = data.savedGroup;
       if (data.savedNpi) npiInput.value = data.savedNpi;
       if (data.savedDosRange) dosRangeInput.value = data.savedDosRange;
+    });
+  }
+
+  function loadLastReport() {
+    chrome.storage.local.get(["lastReport"], (data) => {
+      if (data.lastReport && data.lastReport.results && data.lastReport.results.length > 0) {
+        currentResults = data.lastReport.results;
+        updateResultSummary();
+        resultSummary.style.display = "grid";
+        progressSection.style.display = "block";
+        progressBar.style.width = "100%";
+        progressBar.classList.remove("animated");
+        const when = new Date(data.lastReport.timestamp);
+        const timeStr = when.toLocaleString();
+        progressPhase.textContent = `Last report: ${timeStr}`;
+        progressCount.textContent = `${data.lastReport.count} patients`;
+        downloadBar.style.display = "block";
+      }
     });
   }
 
@@ -962,7 +981,7 @@
 
   // ─── Completion / Error Handlers ───
 
-  function handleComplete(results) {
+  function handleComplete(results, { autoDownload = true } = {}) {
     currentResults = results || [];
     setRunningState(false);
     setConnectionStatus("ready", "Complete");
@@ -976,8 +995,11 @@
 
     if (currentResults.length > 0) {
       downloadBar.style.display = "block";
-      // Auto-download the Excel file
-      downloadResults();
+      // Persist results so they survive popup close / browser restart
+      saveLastReport(currentResults);
+      if (autoDownload) {
+        downloadResults();
+      }
     }
 
     const eligible = currentResults.filter((r) => r.status === "ELIGIBLE" || r.status === "ACTIVE").length;
@@ -988,6 +1010,15 @@
     } else {
       showAlert("success", `Done! ${currentResults.length} patients processed, ${eligible} eligible.`);
     }
+  }
+
+  function saveLastReport(results) {
+    const report = {
+      results: results,
+      timestamp: new Date().toISOString(),
+      count: results.length,
+    };
+    chrome.storage.local.set({ lastReport: report });
   }
 
   let mfaCountdownInterval = null;
@@ -1216,7 +1247,7 @@
     }
 
     if (st.status === "done") {
-      handleComplete(st.results);
+      handleComplete(st.results, { autoDownload: false });
     } else if (st.status === "error") {
       setConnectionStatus("error", "Error");
       showAlert("error", "An error occurred during the last run. Check the log for details.");
@@ -1372,14 +1403,19 @@
   }
 
   function downloadBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const reader = new FileReader();
+    reader.onload = function () {
+      chrome.downloads.download(
+        { url: reader.result, filename: filename, saveAs: true },
+        (downloadId) => {
+          if (chrome.runtime.lastError) {
+            console.error("Download failed:", chrome.runtime.lastError);
+            showAlert("error", "Download failed: " + chrome.runtime.lastError.message);
+          }
+        }
+      );
+    };
+    reader.readAsDataURL(blob);
   }
 
   // ─── Utilities ───
