@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
@@ -17,6 +18,119 @@ from emr import PassageHealthScraper
 
 logger = logging.getLogger(__name__)
 
+# ─── Color palette ───
+COLORS = {
+    "bg": "#f5f5f7",
+    "card": "#ffffff",
+    "primary": "#0071e3",
+    "primary_hover": "#0077ed",
+    "danger": "#ff3b30",
+    "warning": "#ff9500",
+    "success": "#34c759",
+    "text": "#1d1d1f",
+    "text_secondary": "#86868b",
+    "border": "#d2d2d7",
+    "input_bg": "#ffffff",
+    "log_bg": "#1d1d1f",
+    "log_fg": "#e5e5e7",
+    "log_timestamp": "#86868b",
+}
+
+FONT_FAMILY = "SF Pro Display" if platform.system() == "Darwin" else "Segoe UI"
+FONT = (FONT_FAMILY, 13)
+FONT_SMALL = (FONT_FAMILY, 11)
+FONT_BOLD = (FONT_FAMILY, 13, "bold")
+FONT_HEADING = (FONT_FAMILY, 15, "bold")
+FONT_LOG = ("SF Mono" if platform.system() == "Darwin" else "Consolas", 11)
+
+
+def _configure_styles():
+    """Set up modern ttk styles."""
+    style = ttk.Style()
+
+    # Use clam as base — it's the most customizable cross-platform theme
+    style.theme_use("clam")
+
+    # General widget background
+    style.configure(".", background=COLORS["bg"], font=FONT,
+                    foreground=COLORS["text"])
+
+    # Frames
+    style.configure("TFrame", background=COLORS["bg"])
+    style.configure("Card.TFrame", background=COLORS["card"],
+                    relief="flat", borderwidth=0)
+
+    # Labels
+    style.configure("TLabel", background=COLORS["bg"], font=FONT,
+                    foreground=COLORS["text"])
+    style.configure("Card.TLabel", background=COLORS["card"])
+    style.configure("Heading.TLabel", font=FONT_HEADING,
+                    background=COLORS["bg"])
+    style.configure("Secondary.TLabel", foreground=COLORS["text_secondary"],
+                    background=COLORS["bg"], font=FONT_SMALL)
+    style.configure("Status.TLabel", foreground=COLORS["primary"],
+                    background=COLORS["bg"], font=FONT_SMALL)
+    style.configure("CardSecondary.TLabel", foreground=COLORS["text_secondary"],
+                    background=COLORS["card"], font=FONT_SMALL)
+    style.configure("CardStatus.TLabel", foreground=COLORS["primary"],
+                    background=COLORS["card"], font=FONT_SMALL)
+
+    # LabelFrames
+    style.configure("TLabelframe", background=COLORS["card"],
+                    foreground=COLORS["text"], relief="flat",
+                    borderwidth=1, bordercolor=COLORS["border"])
+    style.configure("TLabelframe.Label", background=COLORS["card"],
+                    font=FONT_BOLD, foreground=COLORS["text"])
+
+    # Entries
+    style.configure("TEntry", fieldbackground=COLORS["input_bg"],
+                    borderwidth=1, relief="solid", padding=(8, 6))
+    style.map("TEntry",
+              bordercolor=[("focus", COLORS["primary"]),
+                           ("!focus", COLORS["border"])])
+
+    # Buttons — default
+    style.configure("TButton", font=FONT, padding=(16, 8),
+                    borderwidth=1, relief="flat",
+                    background=COLORS["card"], foreground=COLORS["text"])
+    style.map("TButton",
+              background=[("active", COLORS["border"]),
+                          ("disabled", "#e5e5ea")],
+              foreground=[("disabled", COLORS["text_secondary"])])
+
+    # Primary button (blue)
+    style.configure("Primary.TButton", font=FONT_BOLD,
+                    background=COLORS["primary"], foreground="#ffffff",
+                    borderwidth=0, padding=(20, 10))
+    style.map("Primary.TButton",
+              background=[("active", COLORS["primary_hover"]),
+                          ("disabled", "#a1c4fd")],
+              foreground=[("disabled", "#ffffff")])
+
+    # Danger button (red)
+    style.configure("Danger.TButton",
+                    background=COLORS["danger"], foreground="#ffffff",
+                    borderwidth=0, padding=(16, 8))
+    style.map("Danger.TButton",
+              background=[("active", "#ff453a"), ("disabled", "#e5e5ea")],
+              foreground=[("disabled", COLORS["text_secondary"])])
+
+    # Checkbuttons
+    style.configure("TCheckbutton", background=COLORS["card"], font=FONT_SMALL)
+    style.configure("Card.TCheckbutton", background=COLORS["card"])
+
+    # Radiobuttons
+    style.configure("TRadiobutton", background=COLORS["card"], font=FONT)
+    style.configure("Card.TRadiobutton", background=COLORS["card"])
+
+    # Progressbar
+    style.configure("TProgressbar", troughcolor=COLORS["border"],
+                    background=COLORS["primary"], thickness=6,
+                    borderwidth=0)
+
+    # Separator
+    style.configure("TSeparator", background=COLORS["border"])
+
 
 class NCTracksVerifierApp:
     """Main application window."""
@@ -24,8 +138,19 @@ class NCTracksVerifierApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("NCTracks Eligibility Verifier")
-        self.root.geometry("800x750")
+        self.root.geometry("820x780")
         self.root.resizable(True, True)
+        self.root.configure(bg=COLORS["bg"])
+
+        # macOS-specific window appearance
+        if platform.system() == "Darwin":
+            try:
+                self.root.tk.call("::tk::unsupported::MacWindowStyle",
+                                  "style", self.root._w, "moveableModal", "")
+            except tk.TclError:
+                pass
+
+        _configure_styles()
 
         self.automation: NCTracksAutomation | None = None
         self.worker_thread: threading.Thread | None = None
@@ -35,147 +160,181 @@ class NCTracksVerifierApp:
         self._build_ui()
         self._load_saved_credentials()
 
+    def _make_card(self, parent, title: str) -> ttk.Frame:
+        """Create a card-style container with a title."""
+        outer = ttk.Frame(parent, style="TFrame")
+        outer.pack(fill=tk.X, pady=(0, 12))
+
+        ttk.Label(outer, text=title, style="Heading.TLabel").pack(
+            anchor=tk.W, pady=(0, 6))
+
+        card = ttk.Frame(outer, style="Card.TFrame")
+        card.pack(fill=tk.X)
+
+        # Draw rounded border via canvas trick — or just use padding
+        inner = ttk.Frame(card, style="Card.TFrame", padding=16)
+        inner.pack(fill=tk.X)
+
+        return inner
+
     def _build_ui(self):
         """Build the application UI."""
-        main_frame = ttk.Frame(self.root, padding=10)
+        # Scrollable main area
+        main_frame = ttk.Frame(self.root, padding=(24, 16, 24, 16))
         main_frame.pack(fill=tk.BOTH, expand=True)
 
         # === EMR Credentials ===
-        emr_frame = ttk.LabelFrame(main_frame, text="EMR Credentials (Passage Health)", padding=10)
-        emr_frame.pack(fill=tk.X, pady=(0, 8))
+        emr_card = self._make_card(main_frame, "EMR Credentials")
 
-        ttk.Label(emr_frame, text="Email:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        row = ttk.Frame(emr_card, style="Card.TFrame")
+        row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(row, text="Email", style="Card.TLabel", width=10).pack(
+            side=tk.LEFT)
         self.emr_email_var = tk.StringVar()
-        self.emr_email_entry = ttk.Entry(emr_frame, textvariable=self.emr_email_var, width=40)
-        self.emr_email_entry.grid(row=0, column=1, sticky=tk.EW, padx=(10, 0), pady=2)
+        self.emr_email_entry = ttk.Entry(row, textvariable=self.emr_email_var)
+        self.emr_email_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
 
-        ttk.Label(emr_frame, text="Password:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        row2 = ttk.Frame(emr_card, style="Card.TFrame")
+        row2.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(row2, text="Password", style="Card.TLabel", width=10).pack(
+            side=tk.LEFT)
         self.emr_password_var = tk.StringVar()
-        self.emr_password_entry = ttk.Entry(emr_frame, textvariable=self.emr_password_var,
-                                             width=40, show="*")
-        self.emr_password_entry.grid(row=1, column=1, sticky=tk.EW, padx=(10, 0), pady=2)
+        self.emr_password_entry = ttk.Entry(
+            row2, textvariable=self.emr_password_var, show="*")
+        self.emr_password_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
 
         self.save_emr_creds_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(emr_frame, text="Save credentials securely",
-                         variable=self.save_emr_creds_var).grid(
-            row=2, column=1, sticky=tk.W, padx=(10, 0), pady=2)
-
-        emr_frame.columnconfigure(1, weight=1)
+        ttk.Checkbutton(emr_card, text="Save credentials securely",
+                         variable=self.save_emr_creds_var,
+                         style="Card.TCheckbutton").pack(anchor=tk.W)
 
         # === NCTracks Credentials ===
-        cred_frame = ttk.LabelFrame(main_frame, text="NCTracks Credentials (NCID)", padding=10)
-        cred_frame.pack(fill=tk.X, pady=(0, 8))
+        nct_card = self._make_card(main_frame, "NCTracks Credentials")
 
-        ttk.Label(cred_frame, text="Username:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        row3 = ttk.Frame(nct_card, style="Card.TFrame")
+        row3.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(row3, text="Username", style="Card.TLabel", width=10).pack(
+            side=tk.LEFT)
         self.username_var = tk.StringVar()
-        self.username_entry = ttk.Entry(cred_frame, textvariable=self.username_var, width=40)
-        self.username_entry.grid(row=0, column=1, sticky=tk.EW, padx=(10, 0), pady=2)
+        self.username_entry = ttk.Entry(row3, textvariable=self.username_var)
+        self.username_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
 
-        ttk.Label(cred_frame, text="Password:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        row4 = ttk.Frame(nct_card, style="Card.TFrame")
+        row4.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(row4, text="Password", style="Card.TLabel", width=10).pack(
+            side=tk.LEFT)
         self.password_var = tk.StringVar()
-        self.password_entry = ttk.Entry(cred_frame, textvariable=self.password_var,
-                                         width=40, show="*")
-        self.password_entry.grid(row=1, column=1, sticky=tk.EW, padx=(10, 0), pady=2)
+        self.password_entry = ttk.Entry(
+            row4, textvariable=self.password_var, show="*")
+        self.password_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
 
         self.save_creds_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(cred_frame, text="Save credentials securely",
-                         variable=self.save_creds_var).grid(
-            row=2, column=1, sticky=tk.W, padx=(10, 0), pady=2)
-
-        cred_frame.columnconfigure(1, weight=1)
+        ttk.Checkbutton(nct_card, text="Save credentials securely",
+                         variable=self.save_creds_var,
+                         style="Card.TCheckbutton").pack(anchor=tk.W)
 
         # === Client Source ===
-        source_frame = ttk.LabelFrame(main_frame, text="Client Source", padding=10)
-        source_frame.pack(fill=tk.X, pady=(0, 8))
+        src_card = self._make_card(main_frame, "Client Source")
 
         self.source_var = tk.StringVar(value="emr")
-
-        radio_frame = ttk.Frame(source_frame)
-        radio_frame.pack(fill=tk.X)
-        ttk.Radiobutton(radio_frame, text="Scrape from EMR",
+        radio_row = ttk.Frame(src_card, style="Card.TFrame")
+        radio_row.pack(fill=tk.X, pady=(0, 8))
+        ttk.Radiobutton(radio_row, text="Scrape from EMR",
                          variable=self.source_var, value="emr",
-                         command=self._toggle_source).pack(side=tk.LEFT)
-        ttk.Radiobutton(radio_frame, text="Load from File",
+                         command=self._toggle_source,
+                         style="Card.TRadiobutton").pack(side=tk.LEFT)
+        ttk.Radiobutton(radio_row, text="Load from File",
                          variable=self.source_var, value="file",
-                         command=self._toggle_source).pack(side=tk.LEFT, padx=(20, 0))
+                         command=self._toggle_source,
+                         style="Card.TRadiobutton").pack(side=tk.LEFT, padx=(24, 0))
 
-        # File selection (hidden when EMR mode)
-        self.file_frame = ttk.Frame(source_frame)
-        self.file_frame.pack(fill=tk.X, pady=(8, 0))
+        self.file_frame = ttk.Frame(src_card, style="Card.TFrame")
+        self.file_frame.pack(fill=tk.X, pady=(0, 4))
 
         self.file_path_var = tk.StringVar()
         ttk.Entry(self.file_frame, textvariable=self.file_path_var,
                    state="readonly").pack(side=tk.LEFT, fill=tk.X, expand=True)
-
         self.browse_btn = ttk.Button(self.file_frame, text="Browse...",
                                       command=self._browse_file)
-        self.browse_btn.pack(side=tk.LEFT, padx=(10, 0))
-
+        self.browse_btn.pack(side=tk.LEFT, padx=(8, 0))
         self.template_btn = ttk.Button(self.file_frame, text="Download Template",
                                         command=self._download_template)
-        self.template_btn.pack(side=tk.LEFT, padx=(10, 0))
+        self.template_btn.pack(side=tk.LEFT, padx=(8, 0))
 
         self.patient_count_var = tk.StringVar(value="")
-        ttk.Label(source_frame, textvariable=self.patient_count_var).pack(
-            anchor=tk.W, pady=(4, 0))
+        ttk.Label(src_card, textvariable=self.patient_count_var,
+                   style="CardSecondary.TLabel").pack(anchor=tk.W, pady=(4, 0))
 
-        self._toggle_source()  # Set initial visibility
+        self._toggle_source()
 
-        # === Control Buttons ===
+        # === Action Buttons ===
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill=tk.X, pady=8)
+        btn_frame.pack(fill=tk.X, pady=(4, 12))
 
         self.run_btn = ttk.Button(btn_frame, text="Run Verification",
-                                   command=self._start_run)
+                                   command=self._start_run,
+                                   style="Primary.TButton")
         self.run_btn.pack(side=tk.LEFT)
 
-        self.stop_btn = ttk.Button(btn_frame, text="Stop",
-                                    command=self._stop_run, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT, padx=(10, 0))
-
-        self.abort_btn = ttk.Button(btn_frame, text="Abort",
-                                     command=self._abort_run, state=tk.DISABLED)
-        self.abort_btn.pack(side=tk.LEFT, padx=(10, 0))
-
-        self.test_btn = ttk.Button(btn_frame, text="Test Login Only",
+        self.test_btn = ttk.Button(btn_frame, text="Test Login",
                                     command=self._test_login)
-        self.test_btn.pack(side=tk.LEFT, padx=(10, 0))
+        self.test_btn.pack(side=tk.LEFT, padx=(12, 0))
 
         self.show_browser_btn = ttk.Button(
             btn_frame, text="Show Browser",
             command=self._toggle_browser, state=tk.DISABLED,
         )
-        self.show_browser_btn.pack(side=tk.LEFT, padx=(10, 0))
+        self.show_browser_btn.pack(side=tk.LEFT, padx=(12, 0))
+
+        # Right-aligned stop/abort
+        self.abort_btn = ttk.Button(btn_frame, text="Abort",
+                                     command=self._abort_run,
+                                     state=tk.DISABLED,
+                                     style="Danger.TButton")
+        self.abort_btn.pack(side=tk.RIGHT)
+
+        self.stop_btn = ttk.Button(btn_frame, text="Stop",
+                                    command=self._stop_run, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.RIGHT, padx=(0, 8))
 
         # === Progress ===
-        progress_frame = ttk.LabelFrame(main_frame, text="Progress", padding=8)
-        progress_frame.pack(fill=tk.X, pady=(0, 8))
+        progress_frame = ttk.Frame(main_frame)
+        progress_frame.pack(fill=tk.X, pady=(0, 12))
 
         phase_row = ttk.Frame(progress_frame)
         phase_row.pack(fill=tk.X)
         self.phase_var = tk.StringVar(value="Ready")
         ttk.Label(phase_row, textvariable=self.phase_var,
-                   font=("TkDefaultFont", 10, "bold")).pack(side=tk.LEFT)
+                   font=FONT_BOLD).pack(side=tk.LEFT)
         self.count_var = tk.StringVar(value="")
-        ttk.Label(phase_row, textvariable=self.count_var).pack(side=tk.RIGHT)
+        ttk.Label(phase_row, textvariable=self.count_var,
+                   style="Secondary.TLabel").pack(side=tk.RIGHT)
 
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(
-            progress_frame, variable=self.progress_var, maximum=100
+            progress_frame, variable=self.progress_var, maximum=100,
         )
-        self.progress_bar.pack(fill=tk.X, pady=(4, 2))
+        self.progress_bar.pack(fill=tk.X, pady=(6, 4))
 
         self.status_var = tk.StringVar(value="Ready")
         ttk.Label(progress_frame, textvariable=self.status_var,
-                   foreground="blue").pack(anchor=tk.W)
+                   style="Status.TLabel").pack(anchor=tk.W)
 
         # === Log Output ===
-        log_frame = ttk.LabelFrame(main_frame, text="Log", padding=5)
-        log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 0))
+        log_label_frame = ttk.Frame(main_frame)
+        log_label_frame.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(log_label_frame, text="Log", style="Heading.TLabel").pack(
+            anchor=tk.W)
+
+        log_container = tk.Frame(main_frame, bg=COLORS["log_bg"],
+                                  highlightthickness=0, bd=0)
+        log_container.pack(fill=tk.BOTH, expand=True)
 
         self.log_text = scrolledtext.ScrolledText(
-            log_frame, height=14, state=tk.DISABLED, wrap=tk.WORD,
-            font=("Consolas", 9)
+            log_container, height=10, state=tk.DISABLED, wrap=tk.WORD,
+            font=FONT_LOG, bg=COLORS["log_bg"], fg=COLORS["log_fg"],
+            insertbackground=COLORS["log_fg"], selectbackground=COLORS["primary"],
+            relief="flat", borderwidth=8, padx=8, pady=8,
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
 
@@ -185,7 +344,7 @@ class NCTracksVerifierApp:
             self.file_frame.pack_forget()
             self.patient_count_var.set("Clients will be scraped from EMR")
         else:
-            self.file_frame.pack(fill=tk.X, pady=(8, 0))
+            self.file_frame.pack(fill=tk.X, pady=(0, 4))
             if self.patients:
                 self.patient_count_var.set(f"{len(self.patients)} clients loaded")
             else:
@@ -469,7 +628,7 @@ class NCTracksVerifierApp:
 
             self.automation.start_browser()
 
-            # ── Phase 1: EMR Scrape (if EMR mode) ──
+            # -- Phase 1: EMR Scrape (if EMR mode) --
             if self.source_var.get() == "emr":
                 self._update_phase("EMR Login")
 
@@ -500,7 +659,7 @@ class NCTracksVerifierApp:
                 self._update_status("Aborted.")
                 return
 
-            # ── Phase 2: NCTracks Login ──
+            # -- Phase 2: NCTracks Login --
             self._update_phase("NCTracks Login")
 
             if not self.automation.login():
@@ -511,7 +670,7 @@ class NCTracksVerifierApp:
                 self._update_status("Aborted.")
                 return
 
-            # ── Phase 3: Verification ──
+            # -- Phase 3: Verification --
             self._update_phase("Verification", 0, len(self.patients))
             self.automation.navigate_to_eligibility()
 
@@ -520,7 +679,7 @@ class NCTracksVerifierApp:
 
             results = self.automation.run_batch(self.patients, on_progress=on_progress)
 
-            # ── Phase 4: Save Results ──
+            # -- Phase 4: Save Results --
             if results:
                 output_path = generate_output_path(
                     self.patient_file_path if self.source_var.get() == "file" else None
