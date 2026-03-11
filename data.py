@@ -1,4 +1,5 @@
 """Data loading and result saving for NCTracks Eligibility Verifier."""
+from __future__ import annotations
 
 import os
 from datetime import datetime

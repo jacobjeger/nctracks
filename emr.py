@@ -1,4 +1,5 @@
 """Passage Health EMR scraper — logs in, filters Funding Sources report, scrapes clients."""
+from __future__ import annotations
 
 import logging
 import time

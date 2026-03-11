@@ -1,4 +1,5 @@
 """Tkinter desktop UI for NCTracks Eligibility Verifier."""
+from __future__ import annotations
 
 import os
 import threading

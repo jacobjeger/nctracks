@@ -1,4 +1,5 @@
 """Playwright automation engine for NCTracks eligibility verification."""
+from __future__ import annotations
 
 import re
 import time
