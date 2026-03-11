@@ -37,15 +37,31 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
     <string>10.15</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>LSUIElement</key>
+    <false/>
 </dict>
 </plist>
 PLIST
 
 # Create launcher script
+# Uses pythonw if available (framework Python) — needed for Tkinter GUI in .app bundles
 cat > "$APP_DIR/Contents/MacOS/launch" << LAUNCHER
 #!/bin/bash
 cd "$SCRIPT_DIR"
-python3 main.py
+
+# Redirect output to a log file for debugging
+exec > "\$HOME/Library/Logs/NCTracksVerifier.log" 2>&1
+
+# Prefer pythonw (framework build, required for macOS GUI apps)
+if command -v pythonw3 &>/dev/null; then
+    exec pythonw3 main.py
+elif command -v pythonw &>/dev/null; then
+    exec pythonw main.py
+else
+    # Fall back to python3 with environment hint for Tk
+    export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+    exec python3 main.py
+fi
 LAUNCHER
 chmod +x "$APP_DIR/Contents/MacOS/launch"
 
