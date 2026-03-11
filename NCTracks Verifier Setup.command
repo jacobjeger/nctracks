@@ -47,15 +47,15 @@ for p in python3.11 python3.12 python3.13 python3; do
 done
 
 if [ -z "$PYTHON" ]; then
-    echo ">> Installing Python 3.11..."
-    brew install python@3.11
-    PYTHON="python3.11"
+    echo ">> Installing Python 3.12..."
+    brew install python@3.12
+    PYTHON="python3.12"
 
     # Add to PATH
-    if [ -f /opt/homebrew/bin/python3.11 ]; then
-        PYTHON="/opt/homebrew/bin/python3.11"
-    elif [ -f /usr/local/bin/python3.11 ]; then
-        PYTHON="/usr/local/bin/python3.11"
+    if [ -f /opt/homebrew/bin/python3.12 ]; then
+        PYTHON="/opt/homebrew/bin/python3.12"
+    elif [ -f /usr/local/bin/python3.12 ]; then
+        PYTHON="/usr/local/bin/python3.12"
     fi
 fi
 
@@ -66,14 +66,20 @@ if ! "$PYTHON" -c "import playwright" &> /dev/null; then
     echo ">> Installing required packages (first time only)..."
     "$PYTHON" -m pip install --upgrade pip --quiet
     "$PYTHON" -m pip install -r requirements.txt --quiet
-    echo ">> Installing browser dependencies..."
-    "$PYTHON" -m playwright install-deps chromium
 fi
 
 # Install tkinter if needed (via Homebrew's python-tk)
 if ! "$PYTHON" -c "import tkinter" &> /dev/null; then
     echo ">> Installing GUI toolkit..."
-    brew install python-tk@3.11
+    brew install python-tk@3.12 2>/dev/null || brew install python-tk 2>/dev/null || true
+fi
+
+# Check that Google Chrome is installed
+if [ ! -d "/Applications/Google Chrome.app" ]; then
+    echo ""
+    echo "WARNING: Google Chrome is required but not installed."
+    echo "Please install it from https://www.google.com/chrome/"
+    echo ""
 fi
 
 echo ""

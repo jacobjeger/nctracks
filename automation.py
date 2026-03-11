@@ -378,7 +378,7 @@ class NCTracksAutomation:
         self._stop_requested = True
 
     def _launch_browser(self, headless: bool):
-        """Launch browser with given headless mode. Tries Chrome, falls back to Chromium."""
+        """Launch system Chrome. Bundled Chromium is NOT used (macOS compat issues)."""
         launch_args = ["--no-first-run", "--no-default-browser-check"]
 
         try:
@@ -389,12 +389,11 @@ class NCTracksAutomation:
                 args=launch_args,
             )
         except Exception as e:
-            logger.warning(f"System Chrome failed ({e}), trying bundled Chromium...")
-            return self.playwright.chromium.launch(
-                headless=headless,
-                slow_mo=config.SLOW_MO,
-                args=launch_args,
-            )
+            raise Exception(
+                "Google Chrome is required but was not found.\n"
+                "Please install Chrome from https://www.google.com/chrome/ "
+                "and try again."
+            ) from e
 
     def start_browser(self):
         """Launch the browser headless (invisible)."""
