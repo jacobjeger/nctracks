@@ -1,0 +1,9 @@
+#!/bin/bash
+# NCTracks Verifier - Mac App Launcher
+# Finds the project directory relative to this .app bundle and runs the setup script.
+
+# Resolve the directory where the .app lives
+APP_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+
+# Run the setup/launch script
+open -a Terminal "$APP_DIR/NCTracks Verifier Setup.command"

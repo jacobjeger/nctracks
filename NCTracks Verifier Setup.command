@@ -66,8 +66,8 @@ if ! "$PYTHON" -c "import playwright" &> /dev/null; then
     echo ">> Installing required packages (first time only)..."
     "$PYTHON" -m pip install --upgrade pip --quiet
     "$PYTHON" -m pip install -r requirements.txt --quiet
-    echo ">> Installing browser engine..."
-    "$PYTHON" -m playwright install chromium
+    echo ">> Installing browser dependencies..."
+    "$PYTHON" -m playwright install-deps chromium
 fi
 
 # Install tkinter if needed (via Homebrew's python-tk)
