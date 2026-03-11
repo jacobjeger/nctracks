@@ -402,6 +402,9 @@ class NCTracksAutomation:
         self.playwright = sync_playwright().start()
         self.browser = self._launch_browser(headless=True)
         self._create_context()
+        self._mfa_browser = None
+        self._mfa_context = None
+        self._mfa_page = None
 
     def _create_context(self):
         """Create browser context and page."""
@@ -418,51 +421,64 @@ class NCTracksAutomation:
         self.page.set_default_navigation_timeout(config.NAVIGATION_TIMEOUT)
 
     def _show_browser(self):
-        """Relaunch browser as visible, preserving session via cookies."""
+        """Open a separate visible browser for MFA, sharing session cookies."""
         try:
             if not self.page:
                 return
-            # Save current state
             url = self.page.url
             cookies = self.context.cookies()
 
-            # Close headless browser
-            self.context.close()
-            self.browser.close()
-
-            # Relaunch visible
-            self.browser = self._launch_browser(headless=False)
-            self._create_context()
-            self.context.add_cookies(cookies)
-            self.page.goto(url, wait_until="domcontentloaded",
-                           timeout=config.PAGE_LOAD_TIMEOUT)
-            self._browser_headless = False
+            # Launch a second, visible browser just for MFA
+            self._mfa_browser = self._launch_browser(headless=False)
+            self._mfa_context = self._mfa_browser.new_context(
+                viewport={"width": 800, "height": 700},
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+            )
+            self._mfa_context.add_cookies(cookies)
+            self._mfa_page = self._mfa_context.new_page()
+            self._mfa_page.goto(url, wait_until="domcontentloaded",
+                                timeout=config.PAGE_LOAD_TIMEOUT)
         except Exception as e:
-            logger.warning(f"Could not show browser: {e}")
+            logger.warning(f"Could not open MFA browser: {e}")
 
     def _hide_browser(self):
-        """Switch back to headless, preserving session via cookies."""
+        """Close the visible MFA browser and transfer cookies back."""
         try:
-            if not self.page:
-                return
-            url = self.page.url
-            cookies = self.context.cookies()
+            if self._mfa_context:
+                # Transfer cookies from MFA browser back to headless
+                cookies = self._mfa_context.cookies()
+                self.context.add_cookies(cookies)
 
-            self.context.close()
-            self.browser.close()
+                # Navigate headless browser to where MFA browser ended up
+                if self._mfa_page:
+                    url = self._mfa_page.url
+                    self.page.goto(url, wait_until="domcontentloaded",
+                                   timeout=config.PAGE_LOAD_TIMEOUT)
 
-            self.browser = self._launch_browser(headless=True)
-            self._create_context()
-            self.context.add_cookies(cookies)
-            self.page.goto(url, wait_until="domcontentloaded",
-                           timeout=config.PAGE_LOAD_TIMEOUT)
-            self._browser_headless = True
+            # Clean up MFA browser
+            if self._mfa_context:
+                self._mfa_context.close()
+            if self._mfa_browser:
+                self._mfa_browser.close()
         except Exception as e:
-            logger.warning(f"Could not hide browser: {e}")
+            logger.warning(f"Could not close MFA browser: {e}")
+        finally:
+            self._mfa_browser = None
+            self._mfa_context = None
+            self._mfa_page = None
 
     def close(self):
         """Clean up browser resources."""
         try:
+            # Close MFA browser if still open
+            if getattr(self, "_mfa_context", None):
+                self._mfa_context.close()
+            if getattr(self, "_mfa_browser", None):
+                self._mfa_browser.close()
             if self.context:
                 self.context.close()
             if self.browser:
@@ -476,6 +492,9 @@ class NCTracksAutomation:
             self.context = None
             self.browser = None
             self.playwright = None
+            self._mfa_browser = None
+            self._mfa_context = None
+            self._mfa_page = None
             self._logged_in = False
 
     # ─── Login Flow ───
@@ -659,12 +678,18 @@ class NCTracksAutomation:
             )
             self.on_mfa_required()
 
+        # Poll the MFA browser (visible) for completion
+        poll_page = self._mfa_page if self._mfa_page else self.page
         max_wait = config.MFA_TIMEOUT_SECONDS
         start = time.time()
         while time.time() - start < max_wait:
             if self._abort_requested:
                 raise Exception("Aborted by user")
-            current_url = self.page.url
+            try:
+                current_url = poll_page.url
+            except Exception:
+                # MFA browser may have been closed manually
+                break
             if (config.NCID_LOGIN_BASE not in current_url
                     and "ncid.nc.gov" not in current_url):
                 self.on_status("MFA completed, loading portal...")
@@ -672,6 +697,8 @@ class NCTracksAutomation:
                 return
             time.sleep(2)
 
+        # Clean up MFA browser even on timeout
+        self._hide_browser()
         raise Exception("MFA timeout — did not complete within 5 minutes")
 
     def _wait_for_portal_landing(self):
