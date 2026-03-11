@@ -377,31 +377,34 @@ class NCTracksAutomation:
         self._abort_requested = True
         self._stop_requested = True
 
-    def start_browser(self):
-        """Launch the browser (off-screen — shown only when MFA is needed)."""
-        self.on_status("Launching browser...")
-        self.playwright = sync_playwright().start()
+    def _launch_browser(self, headless: bool):
+        """Launch browser with given headless mode. Tries Chrome, falls back to Chromium."""
+        launch_args = ["--no-first-run", "--no-default-browser-check"]
 
-        launch_args = ["--window-position=-9999,-9999", "--no-first-run",
-                       "--no-default-browser-check"]
-
-        # Try system Chrome first, fall back to bundled Chromium
         try:
-            self.on_status("Launching Chrome...")
-            self.browser = self.playwright.chromium.launch(
+            return self.playwright.chromium.launch(
                 channel="chrome",
-                headless=config.HEADLESS,
+                headless=headless,
                 slow_mo=config.SLOW_MO,
                 args=launch_args,
             )
         except Exception as e:
             logger.warning(f"System Chrome failed ({e}), trying bundled Chromium...")
-            self.on_status("Chrome not found, trying Chromium...")
-            self.browser = self.playwright.chromium.launch(
-                headless=config.HEADLESS,
+            return self.playwright.chromium.launch(
+                headless=headless,
                 slow_mo=config.SLOW_MO,
                 args=launch_args,
             )
+
+    def start_browser(self):
+        """Launch the browser headless (invisible)."""
+        self.on_status("Launching browser...")
+        self.playwright = sync_playwright().start()
+        self.browser = self._launch_browser(headless=True)
+        self._create_context()
+
+    def _create_context(self):
+        """Create browser context and page."""
         self.context = self.browser.new_context(
             viewport={"width": 1280, "height": 900},
             user_agent=(
@@ -415,35 +418,47 @@ class NCTracksAutomation:
         self.page.set_default_navigation_timeout(config.NAVIGATION_TIMEOUT)
 
     def _show_browser(self):
-        """Bring the browser window to the foreground for MFA/CAPTCHA."""
+        """Relaunch browser as visible, preserving session via cookies."""
         try:
-            if self.page:
-                cdp = self.context.new_cdp_session(self.page)
-                # Get the window, move it on-screen and activate it
-                result = cdp.send("Browser.getWindowForTarget")
-                window_id = result["windowId"]
-                cdp.send("Browser.setWindowBounds", {
-                    "windowId": window_id,
-                    "bounds": {"left": 100, "top": 100, "windowState": "normal"},
-                })
-                cdp.detach()
+            if not self.page:
+                return
+            # Save current state
+            url = self.page.url
+            cookies = self.context.cookies()
+
+            # Close headless browser
+            self.context.close()
+            self.browser.close()
+
+            # Relaunch visible
+            self.browser = self._launch_browser(headless=False)
+            self._create_context()
+            self.context.add_cookies(cookies)
+            self.page.goto(url, wait_until="domcontentloaded",
+                           timeout=config.PAGE_LOAD_TIMEOUT)
+            self._browser_headless = False
         except Exception as e:
-            logger.debug(f"Could not reposition browser window: {e}")
+            logger.warning(f"Could not show browser: {e}")
 
     def _hide_browser(self):
-        """Move the browser window back off-screen."""
+        """Switch back to headless, preserving session via cookies."""
         try:
-            if self.page:
-                cdp = self.context.new_cdp_session(self.page)
-                result = cdp.send("Browser.getWindowForTarget")
-                window_id = result["windowId"]
-                cdp.send("Browser.setWindowBounds", {
-                    "windowId": window_id,
-                    "bounds": {"left": -9999, "top": -9999, "windowState": "normal"},
-                })
-                cdp.detach()
+            if not self.page:
+                return
+            url = self.page.url
+            cookies = self.context.cookies()
+
+            self.context.close()
+            self.browser.close()
+
+            self.browser = self._launch_browser(headless=True)
+            self._create_context()
+            self.context.add_cookies(cookies)
+            self.page.goto(url, wait_until="domcontentloaded",
+                           timeout=config.PAGE_LOAD_TIMEOUT)
+            self._browser_headless = True
         except Exception as e:
-            logger.debug(f"Could not hide browser window: {e}")
+            logger.warning(f"Could not hide browser: {e}")
 
     def close(self):
         """Clean up browser resources."""

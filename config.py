@@ -58,7 +58,7 @@ RETRY_DELAY_SECONDS = 5
 SESSION_TIMEOUT_MINUTES = 15
 
 # ─── Browser settings ───
-HEADLESS = False  # Must be False for MFA; browser starts off-screen
+HEADLESS = True  # Start headless; browser shown visible only for MFA
 SLOW_MO = 100
 
 # ─── Credential storage ───
