@@ -1,4 +1,5 @@
 """Data loading and result saving for NCTracks Eligibility Verifier."""
+from __future__ import annotations
 
 import os
 from datetime import datetime
@@ -10,16 +11,11 @@ from config import OUTPUT_COLUMNS, INPUT_COLUMNS
 
 
 def generate_template(save_path: str) -> str:
-    """Generate a blank patient list template Excel file.
-
-    Creates an .xlsx with the required column headers and an example row.
-    Returns the saved file path.
-    """
+    """Generate a blank patient list template Excel file."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Patient List"
 
-    # Header styling
     header_font = Font(bold=True, color="FFFFFF", size=11)
     header_fill = PatternFill(start_color="2F5496", end_color="2F5496", fill_type="solid")
     header_align = Alignment(horizontal="center", wrap_text=True)
@@ -30,13 +26,11 @@ def generate_template(save_path: str) -> str:
         cell.fill = header_fill
         cell.alignment = header_align
 
-    # Example row to show expected format
     example = ["1234567890", "John", "Doe", "01/15/1990"]
     for col_idx, val in enumerate(example, 1):
         cell = ws.cell(row=2, column=col_idx, value=val)
         cell.font = Font(italic=True, color="888888")
 
-    # Auto-width columns
     for col in ws.columns:
         col_letter = col[0].column_letter
         max_len = max(len(str(c.value or "")) for c in col)
@@ -47,10 +41,7 @@ def generate_template(save_path: str) -> str:
 
 
 def load_patients(file_path: str) -> list[dict]:
-    """Load patient list from Excel (.xlsx) or CSV (.csv) file.
-
-    Returns list of dicts with keys: medicaid_id, first_name, last_name, dob
-    """
+    """Load patient list from Excel (.xlsx) or CSV (.csv) file."""
     ext = os.path.splitext(file_path)[1].lower()
     if ext == ".csv":
         return _load_csv(file_path)
@@ -124,61 +115,103 @@ def _normalize_row(row: dict) -> dict:
     return normalized
 
 
+# ─── Status colors ───
+_STATUS_FILLS = {
+    "ELIGIBLE": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
+    "NOT ELIGIBLE": PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
+    "NOT FOUND": PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
+    "MANAGED CARE": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
+    "FFS": PatternFill(start_color="FFE599", end_color="FFE599", fill_type="solid"),
+    "ERROR": PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid"),
+    "SKIPPED": PatternFill(start_color="D9D9D9", end_color="D9D9D9", fill_type="solid"),
+}
+_PAYER_CHANGED_FONT = Font(bold=True, color="CC0000")
+
+
 def save_results(results: list[dict], output_path: str):
-    """Save verification results to an Excel file."""
+    """Save verification results to a styled Excel file."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Eligibility Results"
 
     # Header styling
     header_font = Font(bold=True, color="FFFFFF", size=11)
-    header_fill = PatternFill(start_color="2F5496", end_color="2F5496", fill_type="solid")
+    header_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
     header_align = Alignment(horizontal="center", wrap_text=True)
 
-    # Write headers
     for col_idx, header in enumerate(OUTPUT_COLUMNS, 1):
         cell = ws.cell(row=1, column=col_idx, value=header)
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = header_align
 
-    # Write data
-    status_colors = {
-        "ELIGIBLE": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
-        "NOT ELIGIBLE": PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
-    }
+    # Write data rows
+    for row_idx, r in enumerate(results, 2):
+        emr_source = r.get("emr_funding_source", "")
+        entity = r.get("managing_entity", "")
+        entity_next = r.get("managing_entity_next", "")
+        no_entity = not entity or entity == "(none)"
+        no_entity_next = not entity_next or entity_next == "(none)"
 
-    for row_idx, result in enumerate(results, 2):
-        ws.cell(row=row_idx, column=1, value=result.get("medicaid_id", ""))
-        ws.cell(row=row_idx, column=2, value=result.get("name", ""))
+        row_data = [
+            r.get("medicaid_id", ""),
+            r.get("name", ""),
+            r.get("status", ""),
+            emr_source,
+            r.get("insurance_type", ""),
+            "None" if no_entity else entity,
+            r.get("current_period", ""),
+            "None" if no_entity else r.get("payer_changed", ""),
+            "None" if no_entity_next else entity_next,
+            r.get("next_period", ""),
+            "None" if no_entity_next else r.get("payer_changed_next", ""),
+            r.get("checked_at", ""),
+            r.get("notes", ""),
+        ]
 
-        status = result.get("status", "UNKNOWN")
-        status_cell = ws.cell(row=row_idx, column=3, value=status)
-        if status in status_colors:
-            status_cell.fill = status_colors[status]
+        for col_idx, value in enumerate(row_data, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
 
-        ws.cell(row=row_idx, column=4, value=result.get("coverage_start", ""))
-        ws.cell(row=row_idx, column=5, value=result.get("coverage_end", ""))
-        ws.cell(row=row_idx, column=6, value=result.get("plan_name", ""))
-        ws.cell(row=row_idx, column=7, value=result.get("checked_at", ""))
-        ws.cell(row=row_idx, column=8, value=result.get("notes", ""))
+        # Status color (column 3)
+        status = r.get("status", "")
+        if status in _STATUS_FILLS:
+            ws.cell(row=row_idx, column=3).fill = _STATUS_FILLS[status]
 
-    # Auto-width columns
-    for col in ws.columns:
-        max_length = 0
-        col_letter = col[0].column_letter
-        for cell in col:
-            if cell.value:
-                max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[col_letter].width = min(max_length + 4, 40)
+        # Payer Changed highlighting (columns 8 and 11)
+        for col in [8, 11]:
+            cell = ws.cell(row=row_idx, column=col)
+            if cell.value == "YES":
+                cell.font = _PAYER_CHANGED_FONT
+
+    # Summary row
+    summary_row = len(results) + 3
+    eligible = sum(1 for r in results if r.get("status") in ("ELIGIBLE", "MANAGED CARE"))
+    not_eligible = sum(1 for r in results if r.get("status") in ("NOT ELIGIBLE", "NOT FOUND"))
+    errors = sum(1 for r in results if r.get("status") == "ERROR")
+    skipped = sum(1 for r in results if r.get("status") == "SKIPPED")
+
+    ws.cell(row=summary_row, column=1, value="Summary").font = Font(bold=True)
+    ws.cell(row=summary_row + 1, column=1, value=f"Eligible: {eligible}")
+    ws.cell(row=summary_row + 2, column=1, value=f"Not Eligible: {not_eligible}")
+    ws.cell(row=summary_row + 3, column=1, value=f"Errors: {errors}")
+    if skipped > 0:
+        ws.cell(row=summary_row + 4, column=1, value=f"Skipped: {skipped}")
+
+    # Column widths
+    col_widths = [14, 25, 14, 30, 14, 28, 16, 16, 28, 16, 18, 20, 40]
+    for i, width in enumerate(col_widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = width
 
     wb.save(output_path)
     return output_path
 
 
-def generate_output_path(input_path: str) -> str:
-    """Generate output file path based on input file name."""
-    base = os.path.splitext(os.path.basename(input_path))[0]
+def generate_output_path(input_path: str | None = None) -> str:
+    """Generate output file path based on input file name or timestamp."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    directory = os.path.dirname(input_path) or "."
-    return os.path.join(directory, f"{base}_results_{timestamp}.xlsx")
+    if input_path:
+        base = os.path.splitext(os.path.basename(input_path))[0]
+        directory = os.path.dirname(input_path) or "."
+        return os.path.join(directory, f"{base}_results_{timestamp}.xlsx")
+    else:
+        return f"eligibility_results_{timestamp}.xlsx"

@@ -5,12 +5,19 @@ import os
 import subprocess
 import sys
 
+# When running as a PyInstaller bundle, use the app's directory for logs
+if getattr(sys, 'frozen', False):
+    _app_dir = os.path.dirname(sys.executable)
+    _log_file = os.path.join(_app_dir, "nctracks_verifier.log")
+else:
+    _log_file = "nctracks_verifier.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("nctracks_verifier.log", mode="a"),
+        logging.FileHandler(_log_file, mode="a"),
     ],
 )
 
@@ -18,8 +25,12 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_dependencies():
-    """Install missing pip packages and Playwright browsers on first run."""
-    required = ["playwright", "openpyxl", "keyring"]
+    """Install missing pip packages on first run (skipped in standalone mode)."""
+    # Skip dependency installation when running as a bundled app
+    if getattr(sys, 'frozen', False):
+        return
+
+    required = ["playwright", "openpyxl"]
     missing = []
     for pkg in required:
         try:
@@ -34,18 +45,6 @@ def _ensure_dependencies():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-
-    # Check if Playwright browsers are installed
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            p.chromium.executable_path
-    except Exception:
-        print("First run — installing browser (one-time, may take a minute)...")
-        subprocess.check_call(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
-        )
-        print("Browser installed!")
 
 
 def main():

@@ -19,6 +19,8 @@
   const usernameInput = $("username");
   const passwordInput = $("password");
   const togglePasswordBtn = $("togglePassword");
+  const totpSecretInput = $("totpSecret");
+  const toggleTotpBtn = $("toggleTotp");
   const saveCredsCheckbox = $("saveCreds");
   const testLoginBtn = $("testLoginBtn");
   const fileDropZone = $("fileDropZone");
@@ -48,6 +50,7 @@
   const dosRangeInput = $("dosRange");
   const runBtn = $("runBtn");
   const stopBtn = $("stopBtn");
+  const abortBtn = $("abortBtn");
   const progressSection = $("progressSection");
   const progressBar = $("progressBar");
   const progressPhase = $("progressPhase");
@@ -86,6 +89,7 @@
 
   initCollapsibleSections();
   loadSavedData();
+  loadLastReport();
   reconnectToState();
 
   // ─── Collapsible Sections ───
@@ -127,6 +131,9 @@
         usernameInput.value = response.username;
         passwordInput.value = response.password;
       }
+      if (response && response.totpSecret) {
+        totpSecretInput.value = response.totpSecret;
+      }
       if (response && response.emrEmail) {
         emrEmailInput.value = response.emrEmail;
         emrPasswordInput.value = response.emrPassword;
@@ -140,6 +147,24 @@
       if (data.savedGroup) groupInput.value = data.savedGroup;
       if (data.savedNpi) npiInput.value = data.savedNpi;
       if (data.savedDosRange) dosRangeInput.value = data.savedDosRange;
+    });
+  }
+
+  function loadLastReport() {
+    chrome.storage.local.get(["lastReport"], (data) => {
+      if (data.lastReport && data.lastReport.results && data.lastReport.results.length > 0) {
+        currentResults = data.lastReport.results;
+        updateResultSummary();
+        resultSummary.style.display = "grid";
+        progressSection.style.display = "block";
+        progressBar.style.width = "100%";
+        progressBar.classList.remove("animated");
+        const when = new Date(data.lastReport.timestamp);
+        const timeStr = when.toLocaleString();
+        progressPhase.textContent = `Last report: ${timeStr}`;
+        progressCount.textContent = `${data.lastReport.count} patients`;
+        downloadBar.style.display = "block";
+      }
     });
   }
 
@@ -160,6 +185,13 @@
     passwordInput.type = isPassword ? "text" : "password";
     passwordInput.classList.toggle("password-visible", isPassword);
     togglePasswordBtn.title = isPassword ? "Hide password" : "Show password";
+  });
+
+  // TOTP secret toggle
+  toggleTotpBtn.addEventListener("click", () => {
+    const isPassword = totpSecretInput.type === "password";
+    totpSecretInput.type = isPassword ? "text" : "password";
+    toggleTotpBtn.title = isPassword ? "Hide secret" : "Show secret";
   });
 
   // Alert dismiss
@@ -227,6 +259,7 @@
   // Action buttons
   runBtn.addEventListener("click", startVerification);
   stopBtn.addEventListener("click", stopVerification);
+  abortBtn.addEventListener("click", abortVerification);
   testLoginBtn.addEventListener("click", testLogin);
   downloadBtn.addEventListener("click", downloadResults);
   retryBtn.addEventListener("click", retryLastAction);
@@ -236,7 +269,9 @@
     if (msg.type === "log") appendLog(msg.message);
     if (msg.type === "progress") updateProgress(msg);
     if (msg.type === "complete") handleComplete(msg.results);
-    if (msg.type === "mfaRequired") handleMfaRequired();
+    if (msg.type === "mfaRequired") handleMfaRequired(msg);
+    if (msg.type === "mfaCompleted") handleMfaCompleted(msg);
+    if (msg.type === "mfaAutoFilled") handleMfaAutoFilled();
     if (msg.type === "captchaRequired") handleCaptchaRequired();
     if (msg.type === "error") handleError(msg);
     if (msg.type === "tabClosed") handleTabClosed();
@@ -569,6 +604,13 @@
         username: usernameInput.value,
         password: passwordInput.value,
       });
+      // Save TOTP secret if provided
+      if (totpSecretInput.value.trim()) {
+        chrome.runtime.sendMessage({
+          action: "saveTotpSecret",
+          secret: totpSecretInput.value.trim(),
+        });
+      }
     }
 
     if (saveEmrCredsCheckbox.checked && emrEmailInput.value.trim()) {
@@ -674,6 +716,19 @@
     setConnectionStatus("warning", "Stopping");
   }
 
+  function abortVerification() {
+    chrome.runtime.sendMessage({ action: "abortVerification" }, (response) => {
+      if (chrome.runtime.lastError) {
+        showAlert("error", "Failed to send abort signal.");
+        return;
+      }
+    });
+    abortBtn.disabled = true;
+    progressPhase.textContent = "Aborting...";
+    setConnectionStatus("error", "Aborted");
+    setRunningState(false);
+  }
+
   function testLogin() {
     const issues = [];
     if (!usernameInput.value.trim()) issues.push("Username is required");
@@ -690,6 +745,12 @@
         username: usernameInput.value,
         password: passwordInput.value,
       });
+      if (totpSecretInput.value.trim()) {
+        chrome.runtime.sendMessage({
+          action: "saveTotpSecret",
+          secret: totpSecretInput.value.trim(),
+        });
+      }
     }
 
     setRunningState(true);
@@ -735,9 +796,12 @@
       runBtn.style.display = "none";
       stopBtn.style.display = "";
       stopBtn.disabled = false;
+      abortBtn.style.display = "";
+      abortBtn.disabled = false;
     } else {
       runBtn.style.display = "";
       stopBtn.style.display = "none";
+      abortBtn.style.display = "none";
     }
 
     testLoginBtn.disabled = running;
@@ -917,7 +981,7 @@
 
   // ─── Completion / Error Handlers ───
 
-  function handleComplete(results) {
+  function handleComplete(results, { autoDownload = true } = {}) {
     currentResults = results || [];
     setRunningState(false);
     setConnectionStatus("ready", "Complete");
@@ -931,8 +995,11 @@
 
     if (currentResults.length > 0) {
       downloadBar.style.display = "block";
-      // Auto-download the Excel file
-      downloadResults();
+      // Persist results so they survive popup close / browser restart
+      saveLastReport(currentResults);
+      if (autoDownload) {
+        downloadResults();
+      }
     }
 
     const eligible = currentResults.filter((r) => r.status === "ELIGIBLE" || r.status === "ACTIVE").length;
@@ -945,9 +1012,50 @@
     }
   }
 
-  function handleMfaRequired() {
+  function saveLastReport(results) {
+    const report = {
+      results: results,
+      timestamp: new Date().toISOString(),
+      count: results.length,
+    };
+    chrome.storage.local.set({ lastReport: report });
+  }
+
+  let mfaCountdownInterval = null;
+
+  function handleMfaRequired(msg) {
     setConnectionStatus("warning", "MFA Required");
-    showAlert("warning", "MFA required — complete verification in the browser tab, then return here.");
+    const patientInfo = msg && msg.interruptedPatient ? ` Paused at ${msg.interruptedPatient}.` : "";
+    showAlert("warning", `MFA Required — please enter your code in the NCTracks tab. Automation is paused.${patientInfo}`);
+    // Show a spinner/countdown in the progress section
+    progressSection.style.display = "";
+    progressPhase.textContent = "Waiting for MFA...";
+    progressBar.style.width = "100%";
+    progressBar.classList.add("animated");
+    // Start a countdown timer showing elapsed time
+    const mfaStart = Date.now();
+    clearInterval(mfaCountdownInterval);
+    mfaCountdownInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - mfaStart) / 1000);
+      const mins = Math.floor(elapsed / 60);
+      const secs = elapsed % 60;
+      progressDetail.textContent = `Waiting for MFA... ${mins}:${String(secs).padStart(2, "0")} elapsed`;
+    }, 1000);
+  }
+
+  function handleMfaCompleted(msg) {
+    clearInterval(mfaCountdownInterval);
+    setConnectionStatus("processing", "Resuming");
+    const resumeInfo = msg && msg.resumeLabel ? msg.resumeLabel : "Resuming verification...";
+    showAlert("success", `Login successful. ${resumeInfo}`);
+    progressBar.classList.remove("animated");
+    // Alert auto-dismisses after 5s
+    setTimeout(() => hideAlert(), 5000);
+  }
+
+  function handleMfaAutoFilled() {
+    setConnectionStatus("processing", "MFA Auto-filled");
+    progressPhase.textContent = "MFA auto-filled, waiting for login...";
   }
 
   function handleCaptchaRequired() {
@@ -1139,7 +1247,7 @@
     }
 
     if (st.status === "done") {
-      handleComplete(st.results);
+      handleComplete(st.results, { autoDownload: false });
     } else if (st.status === "error") {
       setConnectionStatus("error", "Error");
       showAlert("error", "An error occurred during the last run. Check the log for details.");
@@ -1189,7 +1297,7 @@
       const wb = XLSX.utils.book_new();
       const headers = [
         "Medicaid ID", "Name", "Status",
-        "EMR Funding Source",
+        "EMR Funding Source", "Insurance Type",
         "Managing Entity (Current)", "Current Period", "Payer Changed?",
         "Managing Entity (Next)", "Next Period", "Payer Changed (Next)?",
         "Checked At", "Notes",
@@ -1197,11 +1305,17 @@
 
       const wsData = [headers];
       for (const r of currentResults) {
+        const emrSource = r.emr_funding_source || "";
+        const entity = r.managing_entity || "";
+        const entityNext = r.managing_entity_next || "";
+        // If NCTracks shows no insurance, write "None" in entity and changed columns
+        const noEntity = !entity || entity === "(none)";
+        const noEntityNext = !entityNext || entityNext === "(none)";
         wsData.push([
           r.medicaid_id, r.name, r.status,
-          r.emr_funding_source || "",
-          r.managing_entity || "", r.current_period || r.coverage_dates || "", r.payer_changed || "",
-          r.managing_entity_next || "", r.next_period || "", r.payer_changed_next || "",
+          emrSource, r.insurance_type || "",
+          noEntity ? "None" : entity, r.current_period || r.coverage_dates || "", noEntity ? "None" : (r.payer_changed || ""),
+          noEntityNext ? "None" : entityNext, r.next_period || "", noEntityNext ? "None" : (r.payer_changed_next || ""),
           r.checked_at, r.notes || "",
         ]);
       }
@@ -1234,8 +1348,8 @@
           }
         }
 
-        // Style "Payer Changed?" columns (6 and 9) — highlight YES in red
-        for (const pcCol of [6, 9]) {
+        // Style "Payer Changed?" columns (7 and 10) — highlight YES in red
+        for (const pcCol of [7, 10]) {
           const pcCell = ws[XLSX.utils.encode_cell({ r, c: pcCol })];
           if (pcCell) {
             const pcVal = (pcCell.v || "").toUpperCase();
@@ -1253,6 +1367,7 @@
         { wch: 25 },  // Name
         { wch: 16 },  // Status
         { wch: 32 },  // EMR Funding Source
+        { wch: 14 },  // Insurance Type
         { wch: 35 },  // Managing Entity (Current)
         { wch: 28 },  // Current Period
         { wch: 16 },  // Payer Changed?
@@ -1288,14 +1403,19 @@
   }
 
   function downloadBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const reader = new FileReader();
+    reader.onload = function () {
+      chrome.downloads.download(
+        { url: reader.result, filename: filename, saveAs: true },
+        (downloadId) => {
+          if (chrome.runtime.lastError) {
+            console.error("Download failed:", chrome.runtime.lastError);
+            showAlert("error", "Download failed: " + chrome.runtime.lastError.message);
+          }
+        }
+      );
+    };
+    reader.readAsDataURL(blob);
   }
 
   // ─── Utilities ───

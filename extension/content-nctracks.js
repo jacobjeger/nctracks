@@ -169,13 +169,15 @@
   // ─── Result Scraping ───
 
   // Helper: scan all td pairs on the page for label:value patterns
+  // Bug 1: Enhanced label:value scraper to find Name and DOB
   function scrapeLabelValuePairs() {
     const pairs = {};
+
+    // Strategy 1: td pairs where label cell ends with ":"
     const allTds = document.querySelectorAll("td");
     for (let i = 0; i < allTds.length; i++) {
       const cell = allTds[i];
       const raw = (cell.textContent || "").trim();
-      // Labels end with ":" and are reasonably short
       if (!raw.endsWith(":") || raw.length > 80) continue;
       const label = raw.replace(/:$/, "").trim();
       if (!label) continue;
@@ -186,6 +188,53 @@
         pairs[label] = value;
       }
     }
+
+    // Strategy 2: th + td pairs (NCTracks sometimes uses th for labels)
+    const allRows = document.querySelectorAll("tr");
+    for (const row of allRows) {
+      const th = row.querySelector("th");
+      const td = row.querySelector("td");
+      if (th && td) {
+        const label = (th.textContent || "").replace(/:$/, "").trim();
+        const value = (td.textContent || "").trim();
+        if (label && value && label.length < 80 && !pairs[label]) {
+          pairs[label] = value;
+        }
+      }
+    }
+
+    // Strategy 3: span/label elements followed by sibling with value
+    document.querySelectorAll("span, label, dt").forEach((el) => {
+      const raw = (el.textContent || "").trim();
+      if (!raw.endsWith(":") || raw.length > 80) return;
+      const label = raw.replace(/:$/, "").trim();
+      if (!label || pairs[label]) return;
+      const next = el.nextElementSibling;
+      if (next) {
+        const value = (next.textContent || "").trim();
+        if (value && value.length < 200) {
+          pairs[label] = value;
+        }
+      }
+    });
+
+    // Strategy 4: Regex fallback for Name and DOB from body text
+    if (!pairs["Name"]) {
+      const bodyText = document.body.innerText || "";
+      const nameMatch = bodyText.match(/(?:Recipient\s*)?Name\s*:\s*([^\n\r]+)/i);
+      if (nameMatch) {
+        const val = nameMatch[1].trim().split(/\s{3,}/)[0].trim();
+        if (val && val.length < 100) pairs["Name"] = val;
+      }
+    }
+    if (!pairs["Date of Birth"]) {
+      const bodyText = document.body.innerText || "";
+      const dobMatch = bodyText.match(/Date\s*of\s*Birth\s*:\s*(\d{2}\/\d{2}\/\d{4})/i);
+      if (dobMatch) {
+        pairs["Date of Birth"] = dobMatch[1];
+      }
+    }
+
     return pairs;
   }
 
@@ -1066,6 +1115,19 @@
           sendResponse({ resolved: false, error: "CAPTCHA timeout after " + (CFG.CAPTCHA_TIMEOUT_MS / 1000) + "s" });
         }
       }, 2000);
+      return true;
+    }
+
+    if (msg.action === "checkFormReady") {
+      // Check if the eligibility form is actually present and usable (Fix 2)
+      try {
+        const recipientField = findElement(CFG.RECIPIENT_ID_SELECTORS);
+        const hasSelects = document.querySelectorAll("select").length >= 2;
+        const formReady = !!(recipientField || hasSelects);
+        sendResponse({ formReady, url: window.location.href });
+      } catch (err) {
+        sendResponse({ formReady: false, error: err.message });
+      }
       return true;
     }
 

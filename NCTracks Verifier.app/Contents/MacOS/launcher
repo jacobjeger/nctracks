@@ -1,0 +1,55 @@
+#!/bin/bash
+# NCTracks Verifier — Mac App Launcher
+# Launches the GUI directly (no Terminal window).
+
+# Directory where the .app bundle lives
+APP_DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+cd "$APP_DIR"
+
+LOG="$APP_DIR/nctracks_launcher.log"
+
+# ─── Find Python 3.11+ ───
+PYTHON=""
+for p in python3.13 python3.12 python3.11 python3; do
+    if command -v "$p" &> /dev/null; then
+        ver=$("$p" -c "import sys; print(sys.version_info.minor)" 2>/dev/null)
+        maj=$("$p" -c "import sys; print(sys.version_info.major)" 2>/dev/null)
+        if [ "$maj" = "3" ] && [ "$ver" -ge 11 ] 2>/dev/null; then
+            PYTHON="$p"
+            break
+        fi
+    fi
+done
+
+# Also check Homebrew paths directly
+if [ -z "$PYTHON" ]; then
+    for p in /opt/homebrew/bin/python3.13 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.11 /usr/local/bin/python3.13 /usr/local/bin/python3.12 /usr/local/bin/python3.11; do
+        if [ -x "$p" ]; then
+            PYTHON="$p"
+            break
+        fi
+    done
+fi
+
+if [ -z "$PYTHON" ]; then
+    osascript -e 'display dialog "Python 3.11+ is required but not found.\n\nPlease install it by running this in Terminal:\n\nbrew install python@3.11" buttons {"OK"} default button "OK" with title "NCTracks Verifier" with icon stop'
+    exit 1
+fi
+
+# ─── Install dependencies if needed ───
+if ! "$PYTHON" -c "import playwright" &> /dev/null 2>&1; then
+    osascript -e 'display dialog "First-time setup: installing dependencies.\nThis may take a minute..." buttons {"OK"} default button "OK" with title "NCTracks Verifier"'
+    "$PYTHON" -m pip install --upgrade pip --quiet >> "$LOG" 2>&1
+    "$PYTHON" -m pip install -r "$APP_DIR/requirements.txt" --quiet >> "$LOG" 2>&1
+    "$PYTHON" -m playwright install-deps chromium >> "$LOG" 2>&1
+fi
+
+if ! "$PYTHON" -c "import tkinter" &> /dev/null 2>&1; then
+    osascript -e 'display dialog "Installing GUI toolkit (tkinter).\nThis may take a minute..." buttons {"OK"} default button "OK" with title "NCTracks Verifier"'
+    if command -v brew &> /dev/null; then
+        brew install python-tk@3.11 >> "$LOG" 2>&1
+    fi
+fi
+
+# ─── Launch the app ───
+exec "$PYTHON" "$APP_DIR/main.py" >> "$LOG" 2>&1

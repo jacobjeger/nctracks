@@ -61,10 +61,15 @@
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  // Click an element, trying multiple approaches
+  // Click an element using the full pointer/mouse event sequence that React expects.
+  // React synthetic events rely on mousedown→mouseup→click; el.click() alone is ignored
+  // by Mantine Combobox options because React doesn't register it.
   function clickElement(el) {
     el.focus();
-    el.click();
+    el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true }));
     el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   }
 
@@ -270,54 +275,95 @@
       }
     }
 
-    // Strategy 2: Look for an icon-only button with SVG (filter icon is typically
-    // the middle of 3 icon buttons in the top-right area)
+    // Strategy 2: Find button with "Filter" or "Filters" text content
     if (!filterToggle) {
-      // Find icon-only buttons (no text content, has SVG)
-      const iconBtns = Array.from(allBtns).filter((b) => {
-        const text = (b.textContent || "").trim();
-        return text.length === 0 && b.querySelector("svg");
-      });
-      log(`Found ${iconBtns.length} icon-only SVG buttons`);
+      filterToggle = findByText("button", /^filters?$/i);
+      if (!filterToggle) filterToggle = findByText("button", /show\s*filters?/i);
+      if (!filterToggle) filterToggle = findByText("button", /filter/i);
+      if (filterToggle) log(`Found filter toggle by text content: "${(filterToggle.textContent || "").trim()}"`);
+    }
 
-      // The filter icon is typically a lines/slider icon — look for common patterns
-      for (const btn of iconBtns) {
+    // Strategy 3: Find clickable element with filter-related class names
+    if (!filterToggle) {
+      const filterClassSelectors = [
+        "button[class*='filter' i]",
+        "button[class*='Filter']",
+        "[class*='filter-toggle']",
+        "[class*='filterToggle']",
+        "[class*='filter-btn']",
+        "[class*='filter-button']",
+        "[data-testid*='filter' i]",
+        "[id*='filter' i]",
+      ];
+      for (const sel of filterClassSelectors) {
+        try {
+          const el = document.querySelector(sel);
+          if (el) {
+            filterToggle = el;
+            log(`Found filter toggle by class/attribute selector: "${sel}" class="${(el.className || "").substring(0, 60)}"`);
+            break;
+          }
+        } catch { /* invalid selector */ }
+      }
+    }
+
+    // Strategy 4: Find Mantine button with aria-haspopup="dialog" and filter-like SVG
+    // Passage Health uses Mantine UnstyledButton with a three-horizontal-lines SVG
+    // (path "M6 12h12M3 6h18M9 18h6") as the filter toggle. It has no text, no
+    // aria-label, and no "filter" keyword — only identifiable by SVG path pattern
+    // and aria-haspopup="dialog".
+    if (!filterToggle) {
+      const dialogBtns = document.querySelectorAll('button[aria-haspopup="dialog"]');
+      log(`Found ${dialogBtns.length} buttons with aria-haspopup="dialog"`);
+      for (const btn of dialogBtns) {
+        const svg = btn.querySelector("svg");
+        if (!svg) continue;
+        const pathData = Array.from(svg.querySelectorAll("path"))
+          .map((p) => p.getAttribute("d") || "").join(" ");
+        // Three horizontal lines pattern (filter icon): lines at y=6, y=12, y=18
+        // with decreasing widths (18→12→6 units wide)
+        if (/M\d+\s+6h\d+/.test(pathData) && /M\d+\s+12h\d+/.test(pathData) && /M\d+\s+18h\d+/.test(pathData)) {
+          filterToggle = btn;
+          log(`Found filter toggle by SVG three-lines path pattern (aria-haspopup="dialog")`);
+          break;
+        }
+        // Also match simpler horizontal line patterns (multiple h commands)
+        const hLines = (pathData.match(/h\d+/g) || []).length;
+        if (hLines >= 3 && !pathData.includes("v") && !pathData.includes("V") && !pathData.includes("C") && !pathData.includes("c")) {
+          filterToggle = btn;
+          log(`Found filter toggle by SVG horizontal-lines pattern (${hLines} h-lines)`);
+          break;
+        }
+      }
+    }
+
+    // Strategy 5: Look for SVG-only buttons with filter/funnel SVG content keywords
+    if (!filterToggle) {
+      const svgBtns = Array.from(allBtns).filter((b) => b.querySelector("svg"));
+      for (const btn of svgBtns) {
         const svg = btn.querySelector("svg");
         const svgHtml = (svg.outerHTML || "").toLowerCase();
-        // Filter icons often have horizontal lines or "filter" in path data
         if (svgHtml.includes("filter") || svgHtml.includes("funnel") ||
-            svgHtml.includes("sliders") || svgHtml.includes("adjustments")) {
+            svgHtml.includes("sliders") || svgHtml.includes("adjustments") ||
+            svgHtml.includes("tabler-icon-filter") || svgHtml.includes("icon-filter") ||
+            svgHtml.includes("icon-adjustments")) {
           filterToggle = btn;
           log("Found filter toggle by SVG content keyword");
           break;
         }
       }
+    }
 
-      // If still not found, try the icon buttons in the top-right area
-      // From the screenshot: there are 3 icon buttons, filter is the middle one
-      if (!filterToggle && iconBtns.length >= 2) {
-        // Look at their position — filter buttons are usually near the top
-        const topBtns = iconBtns.filter((b) => {
-          const rect = b.getBoundingClientRect();
-          return rect.top < 250 && rect.right > window.innerWidth * 0.7;
-        });
-        log(`Icon buttons in top-right area: ${topBtns.length}`);
-        for (let i = 0; i < topBtns.length; i++) {
-          const rect = topBtns[i].getBoundingClientRect();
-          log(`  Top-right button ${i}: x=${Math.round(rect.x)} y=${Math.round(rect.y)} w=${Math.round(rect.width)} h=${Math.round(rect.height)}`);
-        }
-
-        if (topBtns.length >= 2) {
-          // Middle button of the group is likely the filter toggle
-          // Sort by x position and pick the middle one
-          topBtns.sort((a, b) => a.getBoundingClientRect().x - b.getBoundingClientRect().x);
-          const middleIdx = Math.floor(topBtns.length / 2);
-          if (topBtns.length === 3) {
-            filterToggle = topBtns[1]; // Middle of 3
-          } else {
-            filterToggle = topBtns[middleIdx];
-          }
-          log(`Using middle top-right icon button as filter toggle (index ${middleIdx})`);
+    // Strategy 5: Look for any anchor/div that acts as filter toggle
+    if (!filterToggle) {
+      const candidates = document.querySelectorAll("a[href*='filter' i], div[role='button']");
+      for (const el of candidates) {
+        const text = (el.textContent || "").trim().toLowerCase();
+        const ariaLabel = (el.getAttribute("aria-label") || "").toLowerCase();
+        if (text.includes("filter") || ariaLabel.includes("filter")) {
+          filterToggle = el;
+          log(`Found filter toggle (non-button element): tag=${el.tagName} text="${text.substring(0, 30)}"`);
+          break;
         }
       }
     }
@@ -355,51 +401,95 @@
     log("Looking for Status filter dropdown...");
     let statusApplied = false;
 
-    statusApplied = await selectMantineDropdownOption("Status", "Active");
+    statusApplied = await selectMantineMultiSelectOption("Status", "Active");
     if (!statusApplied) {
       diagnostics.push("Status filter: could not select Active");
     }
-    await delay(1000);
+    await delay(500);
+
+    // Close any open dropdown before moving to the next filter
+    document.activeElement?.blur();
+    await delay(500);
 
     // ── Step 3: Funding Sources Filter ──
     log("Looking for Funding Sources filter dropdown...");
     let fundingApplied = false;
     const targetSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
 
-    // For a multi-select, we need to open the dropdown and select each source
-    const fundingTrigger = await findAndClickFilterDropdown("Funding sources");
-    if (!fundingTrigger) {
-      diagnostics.push("Funding Sources filter dropdown not found");
-    } else {
-      await delay(1000);
+    if (targetSources.length > 0) {
+      // For Mantine MultiSelect: type each source name into the search input
+      // to filter the options, then click the matching option.
+      const fundingInput = await findAndClickFilterDropdown("Funding sources");
+      if (!fundingInput) {
+        diagnostics.push("Funding Sources filter dropdown not found");
+      } else {
+        let selectedCount = 0;
+        for (const sourceName of targetSources) {
+          // Type the source name to filter dropdown options
+          log(`Typing "${sourceName}" into Funding sources search...`);
+          setInputValue(fundingInput, sourceName);
+          await delay(800);
 
-      // Log the Mantine dropdown portal content
-      logMantineDropdown();
+          // Log what appeared
+          logMantineDropdown();
 
-      let selectedCount = 0;
-      for (const sourceName of targetSources) {
-        const option = findMantineOption(sourceName);
-        if (option) {
-          clickElement(option);
-          selectedCount++;
-          log(`Selected funding source: "${sourceName}"`);
-          await delay(500);
-        } else {
-          log(`Could not find funding source option: "${sourceName}"`);
+          // Click the matching option (full pointer/mouse event sequence)
+          const option = findMantineOption(sourceName);
+          if (option) {
+            clickElement(option);
+            selectedCount++;
+            log(`Selected funding source: "${sourceName}"`);
+            await delay(500);
+          } else {
+            log(`Could not find funding source option: "${sourceName}"`);
+            diagnostics.push(`Funding source not found: "${sourceName}"`);
+          }
+
+          // Clear the search input for the next source
+          setInputValue(fundingInput, "");
+          await delay(300);
         }
-      }
 
-      if (selectedCount > 0) {
-        fundingApplied = true;
-        log(`Selected ${selectedCount}/${targetSources.length} funding sources`);
-      }
+        if (selectedCount > 0) {
+          fundingApplied = true;
+          log(`Selected ${selectedCount}/${targetSources.length} funding sources`);
+        }
 
-      // Close the dropdown by pressing Escape or clicking outside
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await delay(500);
+        // Close the dropdown
+        fundingInput.blur();
+        await delay(500);
+      }
     }
 
-    // ── Step 4: Wait for table to update ──
+    // ── Step 4: Click "Done" button to apply filters ──
+    log("Looking for Done / Apply button...");
+    let applyBtn = null;
+
+    // The Done button has nested <div><span>Done</span></div>, so textContent
+    // may have whitespace. Also look for primary-colored buttons.
+    for (const btn of document.querySelectorAll("button")) {
+      const text = (btn.textContent || "").trim();
+      if (/^done$/i.test(text)) {
+        applyBtn = btn;
+        break;
+      }
+    }
+    if (!applyBtn) applyBtn = findByText("button", /^(apply|filter|search|submit|go)(\s+filters?)?$/i);
+    // Fallback: find primary-styled button (bg-primary-600)
+    if (!applyBtn) {
+      applyBtn = document.querySelector('button[class*="bg-primary"]');
+      if (applyBtn) log(`Found primary button as fallback: "${(applyBtn.textContent || "").trim()}"`);
+    }
+
+    if (applyBtn) {
+      log(`Found button: "${(applyBtn.textContent || "").trim()}" — clicking...`);
+      clickElement(applyBtn);
+      await delay(2000);
+    } else {
+      log("No Done/Apply button found — filters may auto-apply on selection");
+    }
+
+    // ── Step 5: Wait for table to update ──
     if (statusApplied || fundingApplied) {
       log("Filters applied — waiting for table to update...");
       await delay(3000);
@@ -426,93 +516,264 @@
     };
   }
 
+  // ─── Payer Filter (Funding Sources Report) ───
+
+  async function applyPayerFilters() {
+    log("Applying Payer filters on Funding Sources report...");
+    logPageState();
+
+    await delay(2000);
+
+    const diagnostics = [];
+    const targetPayers = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
+
+    // ── Step 1: Open the filter panel ──
+    log("Opening filter panel...");
+    let filterPanelOpened = false;
+
+    // Use same strategies as applyFilters to find the filter toggle
+    const allBtns = document.querySelectorAll("button");
+
+    // Strategy: Find button with aria-haspopup="dialog" and filter SVG icon
+    let filterToggle = null;
+    const dialogBtns = document.querySelectorAll('button[aria-haspopup="dialog"]');
+    for (const btn of dialogBtns) {
+      const svg = btn.querySelector("svg");
+      if (!svg) continue;
+      const pathData = Array.from(svg.querySelectorAll("path"))
+        .map((p) => p.getAttribute("d") || "").join(" ");
+      if (/M\d+\s+6h\d+/.test(pathData) && /M\d+\s+12h\d+/.test(pathData) && /M\d+\s+18h\d+/.test(pathData)) {
+        filterToggle = btn;
+        break;
+      }
+      const hLines = (pathData.match(/h\d+/g) || []).length;
+      if (hLines >= 3 && !pathData.includes("v") && !pathData.includes("V") && !pathData.includes("C") && !pathData.includes("c")) {
+        filterToggle = btn;
+        break;
+      }
+    }
+
+    // Fallback: aria-label/title with "filter"
+    if (!filterToggle) {
+      for (const btn of allBtns) {
+        const ariaLabel = (btn.getAttribute("aria-label") || "").toLowerCase();
+        const title = (btn.getAttribute("title") || "").toLowerCase();
+        if (ariaLabel.includes("filter") || title.includes("filter")) {
+          filterToggle = btn;
+          break;
+        }
+      }
+    }
+
+    // Fallback: SVG content keywords
+    if (!filterToggle) {
+      for (const btn of allBtns) {
+        const svg = btn.querySelector("svg");
+        if (svg) {
+          const svgHtml = (svg.outerHTML || "").toLowerCase();
+          if (svgHtml.includes("filter") || svgHtml.includes("icon-adjustments")) {
+            filterToggle = btn;
+            break;
+          }
+        }
+      }
+    }
+
+    if (filterToggle) {
+      log("Clicking filter panel toggle...");
+      clickElement(filterToggle);
+      await delay(1500);
+      filterPanelOpened = true;
+    } else {
+      log("Could not find filter panel toggle");
+      diagnostics.push("Filter panel toggle not found");
+    }
+
+    if (!filterPanelOpened) {
+      return { status: "ERROR", payerApplied: false, diagnostics: diagnostics.join("; ") };
+    }
+
+    // ── Step 2: Select Payers ──
+    log(`Selecting ${targetPayers.length} payers in Payer filter...`);
+    let payerApplied = false;
+
+    // Find the Payer search input — look for the Mantine MultiSelect search input
+    // The Payer filter label is "Payer" in the filter panel
+    const payerInput = await findAndClickFilterDropdown("Payer");
+    if (!payerInput) {
+      diagnostics.push("Payer filter dropdown not found");
+    } else {
+      let selectedCount = 0;
+      for (const payerName of targetPayers) {
+        log(`Typing "${payerName}" into Payer search...`);
+        setInputValue(payerInput, payerName);
+        await delay(800);
+
+        logMantineDropdown();
+
+        const option = findMantineOption(payerName);
+        if (option) {
+          clickElement(option);
+          selectedCount++;
+          log(`Selected payer: "${payerName}"`);
+          await delay(500);
+        } else {
+          log(`Could not find payer option: "${payerName}"`);
+          diagnostics.push(`Payer not found: "${payerName}"`);
+        }
+
+        // Clear search for next payer
+        setInputValue(payerInput, "");
+        await delay(300);
+      }
+
+      if (selectedCount > 0) {
+        payerApplied = true;
+        log(`Selected ${selectedCount}/${targetPayers.length} payers`);
+      }
+
+      // Close the dropdown
+      payerInput.blur();
+      await delay(500);
+    }
+
+    // ── Step 3: Click "Done" button ──
+    log("Looking for Done button...");
+    let doneBtn = null;
+    for (const btn of document.querySelectorAll("button")) {
+      const text = (btn.textContent || "").trim();
+      if (/^done$/i.test(text)) {
+        doneBtn = btn;
+        break;
+      }
+    }
+    if (!doneBtn) {
+      doneBtn = document.querySelector('button[class*="bg-primary"]');
+    }
+
+    if (doneBtn) {
+      log(`Clicking Done button: "${(doneBtn.textContent || "").trim()}"...`);
+      clickElement(doneBtn);
+      await delay(2000);
+    } else {
+      log("No Done button found — filters may auto-apply");
+    }
+
+    // ── Step 4: Wait for table to update ──
+    if (payerApplied) {
+      log("Payer filters applied — waiting for table to update...");
+      await delay(3000);
+      try {
+        await waitFor(() => {
+          const tables = document.querySelectorAll("table");
+          const rows = document.querySelectorAll("table tbody tr, table tr");
+          return tables.length > 0 && rows.length > 1;
+        }, 30000, 1000);
+        log("Table loaded after payer filter");
+      } catch {
+        log("Timeout waiting for table update after payer filter");
+      }
+    }
+
+    logPageState();
+
+    return {
+      status: payerApplied ? "OK" : "PARTIAL",
+      payerApplied,
+      diagnostics: diagnostics.join("; "),
+    };
+  }
+
   // ─── Mantine UI Helpers ───
   // Passage Health uses Mantine UI. Dropdowns render in portals at end of document.body.
   // Options use classes like mantine-Combobox-option, and the dropdown container
   // uses mantine-Combobox-dropdown or similar.
 
-  // Find a filter dropdown by label text and click it open
+  // Find a filter dropdown by label text and click it open.
+  // Mantine MultiSelect/Select: <label for="mantine-xxx"> links to <input id="mantine-xxx">.
+  // Clicking/focusing that input opens the dropdown.
   async function findAndClickFilterDropdown(labelText) {
     log(`Looking for filter dropdown labeled "${labelText}"...`);
 
-    // Find the label element in the filter panel
-    const allTextEls = document.querySelectorAll("label, p, span, div");
-    for (const el of allTextEls) {
-      const text = (el.textContent || el.innerText || "").trim();
-      if (text.length > 30 || !new RegExp(`^${escapeRegex(labelText)}$`, "i").test(text)) continue;
+    // Strategy A: Use label[for] to find the linked input directly
+    const labels = document.querySelectorAll("label");
+    for (const lbl of labels) {
+      const text = (lbl.textContent || "").trim();
+      if (!new RegExp(`^${escapeRegex(labelText)}$`, "i").test(text)) continue;
 
-      log(`Found label "${text}" (tag=${el.tagName}, class="${(el.className || "").substring(0, 60)}")`);
+      log(`Found label "${text}" (tag=${lbl.tagName}, for="${lbl.getAttribute("for") || ""}")`);
 
-      // Look upward and sideways for the clickable trigger
-      const parent = el.parentElement;
-      if (!parent) continue;
-
-      // Mantine uses buttons with class "mantine-*" as triggers
-      const candidates = parent.querySelectorAll(
-        "button, input, [role='combobox'], [class*='mantine-InputWrapper'], [class*='mantine-Input-input'], [class*='mantine-Select'], [class*='mantine-MultiSelect']"
-      );
-      log(`  Trigger candidates near label: ${candidates.length}`);
-      for (let i = 0; i < candidates.length; i++) {
-        const c = candidates[i];
-        log(`  Candidate ${i}: tag=${c.tagName} class="${(c.className || "").substring(0, 50)}" type="${c.type || ""}"`);
-      }
-
-      if (candidates.length > 0) {
-        const trigger = candidates[0];
-        log(`Clicking dropdown trigger: tag=${trigger.tagName} class="${(trigger.className || "").substring(0, 50)}"`);
-        clickElement(trigger);
-        return trigger;
-      }
-
-      // Also try: the parent's parent (filter row container)
-      const grandparent = parent.parentElement;
-      if (grandparent) {
-        const gpCandidates = grandparent.querySelectorAll("button, input, [role='combobox']");
-        if (gpCandidates.length > 0) {
-          log(`Found trigger in grandparent: tag=${gpCandidates[0].tagName}`);
-          clickElement(gpCandidates[0]);
-          return gpCandidates[0];
+      const forId = lbl.getAttribute("for");
+      if (forId) {
+        const linkedInput = document.getElementById(forId);
+        if (linkedInput) {
+          log(`Found linked input by for="${forId}": tag=${linkedInput.tagName} type="${linkedInput.type || ""}"`);
+          clickElement(linkedInput);
+          return linkedInput;
         }
       }
 
-      // Just click the parent
-      log(`Clicking parent container of "${labelText}" label`);
-      clickElement(parent);
-      return parent;
+      // Fallback: find input inside the same wrapper (label's parent)
+      const parent = lbl.parentElement;
+      if (!parent) continue;
+
+      // Look for search input inside a Mantine MultiSelect/Select wrapper
+      const searchInput = parent.querySelector('input[type="search"], input[class*="mantine-MultiSelect-searchInput"], input[class*="mantine-Select-input"]');
+      if (searchInput) {
+        log(`Found search input in parent: class="${(searchInput.className || "").substring(0, 60)}"`);
+        clickElement(searchInput);
+        return searchInput;
+      }
+
+      // Look for combobox wrapper and find input inside it
+      const combobox = parent.querySelector('[role="combobox"]');
+      if (combobox) {
+        const innerInput = combobox.querySelector("input");
+        if (innerInput) {
+          log(`Found input inside combobox: type="${innerInput.type || ""}"`);
+          clickElement(innerInput);
+          return innerInput;
+        }
+        log("Clicking combobox wrapper directly");
+        clickElement(combobox);
+        return combobox;
+      }
+
+      // Last resort: click the mantine input wrapper
+      const inputWrapper = parent.querySelector('[class*="mantine-Input-input"]');
+      if (inputWrapper) {
+        log("Clicking mantine input wrapper");
+        clickElement(inputWrapper);
+        return inputWrapper;
+      }
     }
 
     log(`Could not find filter dropdown for "${labelText}"`);
     return null;
   }
 
-  // Select an option from a Mantine dropdown (for single-select like Status)
-  async function selectMantineDropdownOption(labelText, optionText) {
-    const trigger = await findAndClickFilterDropdown(labelText);
-    if (!trigger) return false;
+  // Select an option from a Mantine MultiSelect by typing into the search input
+  // and pressing Enter to confirm the selection.
+  async function selectMantineMultiSelectOption(labelText, optionText) {
+    const input = await findAndClickFilterDropdown(labelText);
+    if (!input) return false;
 
+    await delay(500);
+
+    // Type the option text to filter the dropdown
+    log(`Typing "${optionText}" into "${labelText}" search input...`);
+    setInputValue(input, optionText);
     await delay(800);
+
     logMantineDropdown();
 
+    // Click the matching option (clickElement now uses full pointer/mouse sequence)
     const option = findMantineOption(optionText);
     if (option) {
       clickElement(option);
-      log(`Selected "${optionText}" in "${labelText}" dropdown`);
+      log(`Selected "${optionText}" in "${labelText}"`);
       await delay(500);
       return true;
-    }
-
-    // If option not found via text, try typing into the input (Mantine Combobox supports search)
-    const input = trigger.tagName === "INPUT" ? trigger : trigger.querySelector("input");
-    if (input) {
-      log(`Trying to type "${optionText}" into search input...`);
-      setInputValue(input, optionText);
-      await delay(500);
-      const searchOption = findMantineOption(optionText);
-      if (searchOption) {
-        clickElement(searchOption);
-        log(`Selected "${optionText}" via search`);
-        return true;
-      }
     }
 
     log(`Could not find option "${optionText}" in "${labelText}" dropdown`);
@@ -643,7 +904,17 @@
         if (/^(LAST\s*NAME)$/i.test(h)) colIdx.last_name = idx;
         if (h.includes("FUNDING") || h.includes("PAYER") || h.includes("INSURANCE")) colIdx.funding = idx;
         if (h.includes("MEDICAID") && h.includes("ID")) colIdx.medicaid_id = idx;
+        // Funding Sources report: "Member ID" column holds the Medicaid ID
+        if (/^MEMBER\s*ID$/.test(h)) colIdx.member_id = idx;
+        // "Client ID" is the internal EMR ID, not Medicaid ID
+        if (/^CLIENT\s*ID$/.test(h)) colIdx.client_id = idx;
+        // "Type" column = Primary/Secondary insurance type
+        if (/^TYPE$/.test(h)) colIdx.insurance_type = idx;
         if (h.includes("STATUS")) colIdx.status = idx;
+        // Additional Funding Sources columns
+        if (/^PLAN\s*NAME$/.test(h)) colIdx.plan_name = idx;
+        if (/^GROUP\s*NUMBER$/.test(h)) colIdx.group_number = idx;
+        if (/^START/.test(h)) colIdx.start_date = idx;
       });
 
       log(`Column mapping: ${JSON.stringify(colIdx)}`);
@@ -686,9 +957,12 @@
 
         // Get funding source / payer info
         let fundingText = getText(colIdx.funding);
-        let medicaidId = getText(colIdx.medicaid_id);
+        // Funding Sources report has a dedicated "Member ID" column for Medicaid ID
+        let medicaidId = getText(colIdx.member_id) || getText(colIdx.medicaid_id);
+        // Insurance type (Primary/Secondary) from the Funding Sources report
+        let insuranceType = getText(colIdx.insurance_type);
 
-        // If no dedicated Medicaid ID column, extract from funding source text
+        // If no dedicated Medicaid/Member ID column, extract from funding source text
         if (!medicaidId && fundingText) {
           const idMatch = fundingText.match(/\b(\d{9,12}[A-Za-z])\b/);
           if (idMatch) medicaidId = idMatch[1];
@@ -706,20 +980,18 @@
           }
         }
 
-        // Extract the funding source name (strip out Medicaid IDs and separators)
-        // EMR format: "Trillium Health Resources NC  • 954658053S" or multiple:
-        // "Healthy Blue North Carolina  • 955193280NTrillium Health Resources NC  • 956669255M"
+        // Extract the funding source / payer name
+        // In the Funding Sources report, the "Payer" column is already clean
         let emrFundingSource = fundingText;
         if (emrFundingSource) {
-          // Remove Medicaid IDs
+          // Remove Medicaid IDs if embedded
           emrFundingSource = emrFundingSource.replace(/\b\d{9,12}[A-Za-z]\b/g, "").trim();
           // Remove bullet separators and dashes, then clean up whitespace
           emrFundingSource = emrFundingSource.replace(/[•·●]/g, "").replace(/[-–—]\s*$/, "").replace(/^\s*[-–—]/, "").trim();
           // Clean up multiple spaces
           emrFundingSource = emrFundingSource.replace(/\s{2,}/g, " ").trim();
 
-          // Split on remaining payer name boundaries — after cleanup, multiple sources
-          // become "Payer One  Payer Two" or similar. Try to match known sources.
+          // Try to match known sources
           const knownSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
           const matchedSource = knownSources.find((fs) => emrFundingSource.toLowerCase().includes(fs.toLowerCase()));
           if (matchedSource) {
@@ -730,15 +1002,31 @@
           }
         }
 
+        // Get status if available
+        const statusText = getText(colIdx.status).toLowerCase();
+
+        // Skip explicitly inactive/terminated clients
+        // "no dates" means no end date (= still active), so don't skip those
+        const inactiveStatuses = ["inactive", "terminated", "cancelled", "canceled", "expired", "closed"];
+        if (colIdx.status !== undefined && statusText && inactiveStatuses.includes(statusText)) {
+          diagnostics.push(`Row ${r + 1}: ${fullName} — skipped (status="${statusText}")`);
+          continue;
+        }
+
         if (fullName && medicaidId) {
           patients.push({
             first_name: firstName,
             last_name: lastName,
             medicaid_id: medicaidId,
             emr_funding_source: emrFundingSource || "",
+            insurance_type: insuranceType || "",
+            plan_name: getText(colIdx.plan_name) || "",
+            group_number: getText(colIdx.group_number) || "",
+            start_date: getText(colIdx.start_date) || "",
+            client_id: getText(colIdx.client_id) || "",
           });
           if (patients.length <= 5 || patients.length % 25 === 0) {
-            log(`Row ${r + 1}: Name="${fullName}", Funding="${fundingText.substring(0, 60)}", ID=${medicaidId}, Source="${emrFundingSource}"`);
+            log(`Row ${r + 1}: Name="${fullName}", Payer="${emrFundingSource}", Type="${insuranceType}", ID=${medicaidId}, Status="${statusText || "n/a"}"`);
           }
         } else if (fullName) {
           diagnostics.push(`Row ${r + 1}: ${fullName} — no Medicaid ID found`);
@@ -746,14 +1034,37 @@
       }
 
       if (patients.length > 0) {
-        log(`Scraped ${patients.length} patients from table ${t}`);
+        log(`Scraped ${patients.length} clients from table ${t}`);
         break; // Found the right table
       }
     }
 
     if (patients.length === 0) {
-      log("No patients found in any table");
+      log("No clients found in any table");
       if (diagnostics.length > 0) log(`Diagnostics: ${diagnostics.join("; ")}`);
+    }
+
+    // ── Client-side filtering fallback ──
+    // If the UI filters weren't applied (or even if they were), filter scraped
+    // patients by configured funding sources to ensure only relevant patients
+    // are included.
+    const allowedSources = CFG.PASSAGEHEALTH_FUNDING_SOURCES || [];
+    if (patients.length > 0 && allowedSources.length > 0) {
+      const beforeFilter = patients.length;
+      const filtered = patients.filter((p) => {
+        if (!p.emr_funding_source) return false;
+        const src = p.emr_funding_source.toLowerCase();
+        return allowedSources.some((allowed) => src.includes(allowed.toLowerCase()));
+      });
+      if (filtered.length < beforeFilter) {
+        log(`Client-side filter: ${beforeFilter} → ${filtered.length} patients (filtered by ${allowedSources.length} configured funding sources)`);
+        const removedCount = beforeFilter - filtered.length;
+        diagnostics.push(`Client-side filter removed ${removedCount} patients with non-matching funding sources`);
+        patients.length = 0;
+        patients.push(...filtered);
+      } else {
+        log(`Client-side filter: all ${beforeFilter} patients matched configured funding sources`);
+      }
     }
 
     return { status: "OK", patients, diagnostics: diagnostics.join("; ") };
@@ -1110,6 +1421,17 @@
         .catch((err) => {
           logError("emrApplyFilters", err);
           sendResponse({ status: "ERROR", diagnostics: err.message });
+        });
+      return true; // async
+    }
+
+    if (msg.action === "emrApplyPayerFilters") {
+      log("Received emrApplyPayerFilters command");
+      applyPayerFilters()
+        .then((result) => sendResponse(result))
+        .catch((err) => {
+          logError("emrApplyPayerFilters", err);
+          sendResponse({ status: "ERROR", payerApplied: false, diagnostics: err.message });
         });
       return true; // async
     }

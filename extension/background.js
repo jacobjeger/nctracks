@@ -7,6 +7,7 @@ const PROVIDER_PORTAL_LOGIN = "https://www.nctracks.nc.gov/ncmmisPortal/loginAct
 const ELIGIBILITY_INQUIRY_URL = "https://www.nctracks.nc.gov/DirectConnect/Eligibility/Inquiry";
 const PASSAGEHEALTH_LOGIN_URL = "https://clinical.passagehealth.com";
 const PASSAGEHEALTH_REPORTS_URL = "https://clinical.passagehealth.com/dashboard/reporting/clients";
+const PASSAGEHEALTH_FUNDING_SOURCES_URL = "https://clinical.passagehealth.com/dashboard/reporting/clients/funding-sources";
 const EMR_PAGE_LOAD_DELAY_MS = 3000;
 const EMR_MAX_PAGES = 100; // Safety limit for pagination
 const MAX_RETRIES = 3;
@@ -17,6 +18,52 @@ const MESSAGE_RETRY_DELAY_MS = 1500;
 const MESSAGE_MAX_RETRIES = 4;
 const MFA_TIMEOUT_MS = 300000; // 5 minutes
 const KEEPALIVE_INTERVAL_MINUTES = 0.4; // 24 seconds
+
+// ─── TOTP Generator (RFC 6238) ───
+// Pure JS implementation — no dependencies. Generates 6-digit TOTP codes
+// from a base32-encoded secret (the kind you get when setting up an authenticator app).
+
+function base32Decode(encoded) {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  const clean = encoded.replace(/[\s=-]+/g, "").toUpperCase();
+  for (const ch of clean) {
+    const val = alphabet.indexOf(ch);
+    if (val === -1) continue;
+    bits += val.toString(2).padStart(5, "0");
+  }
+  const bytes = new Uint8Array(Math.floor(bits.length / 8));
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(bits.slice(i * 8, i * 8 + 8), 2);
+  }
+  return bytes;
+}
+
+async function hmacSha1(keyBytes, message) {
+  const key = await crypto.subtle.importKey(
+    "raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, message);
+  return new Uint8Array(sig);
+}
+
+async function generateTOTP(base32Secret, periodSeconds = 30, digits = 6) {
+  const keyBytes = base32Decode(base32Secret);
+  const counter = Math.floor(Date.now() / 1000 / periodSeconds);
+  // Counter as big-endian 8-byte buffer
+  const counterBuf = new ArrayBuffer(8);
+  const view = new DataView(counterBuf);
+  view.setUint32(4, counter, false); // low 32 bits (high 32 are 0 for decades)
+  const hash = await hmacSha1(keyBytes, counterBuf);
+  // Dynamic truncation
+  const offset = hash[hash.length - 1] & 0x0f;
+  const code =
+    ((hash[offset] & 0x7f) << 24) |
+    ((hash[offset + 1] & 0xff) << 16) |
+    ((hash[offset + 2] & 0xff) << 8) |
+    (hash[offset + 3] & 0xff);
+  return String(code % 10 ** digits).padStart(digits, "0");
+}
 
 // ─── State ───
 
@@ -35,6 +82,11 @@ let state = {
   lastErrorType: null,
   mfaStartTime: null,
   loginRetryCount: 0,
+  // Session expiry tracking
+  trueExpiryCount: 0,
+  falseAlarmCount: 0,
+  // Login suppression (Fix 6)
+  lastLoginSuccessTime: 0,
 };
 
 // Guard against concurrent processNextPatient calls
@@ -92,17 +144,72 @@ function updateBadge() {
   }
 }
 
-function showNotification(title, message) {
+function showNotification(title, message, options = {}) {
   try {
-    chrome.notifications.create({
+    const notifId = "nctracks_" + Date.now();
+    const notifOptions = {
       type: "basic",
       iconUrl: "icons/icon128.png",
       title,
       message,
+      priority: 2,
+      requireInteraction: false,
+      ...options,
+    };
+    chrome.notifications.create(notifId, notifOptions, (id) => {
+      if (chrome.runtime.lastError) {
+        console.warn("Notification failed:", chrome.runtime.lastError.message);
+      }
     });
-  } catch {
-    // notifications may not be available
+  } catch (err) {
+    console.warn("Notification error:", err);
   }
+}
+
+// ─── Name Validation ───
+
+const NAME_LABEL_NOISE = [
+  "last name:", "first name:", "date of birth:", "name:", "dob:",
+  "recipient name:", "recipient id:", "gender:", "admin county code:",
+  "primary care provider:", "daytime phone:", "address:",
+  "tailored care manager:", "tribal member:",
+];
+
+/**
+ * Clean a scraped name by removing label text contamination,
+ * and flag names that look truncated (no spaces / obvious concatenation).
+ * Returns { name, nameWarning }.
+ */
+function validateScrapedName(rawName, fallback) {
+  let name = (rawName || fallback || "").trim();
+
+  // Strip any label fragments that leaked into the scraped value
+  const lower = name.toLowerCase();
+  for (const label of NAME_LABEL_NOISE) {
+    const idx = lower.indexOf(label);
+    if (idx !== -1) {
+      name = (name.slice(0, idx) + name.slice(idx + label.length)).trim();
+    }
+  }
+  // Collapse multiple spaces left over from stripping
+  name = name.replace(/\s{2,}/g, " ").trim();
+
+  // Flag names that look truncated or concatenated
+  let nameWarning = "";
+  if (name.length > 0) {
+    const hasSpace = /\s/.test(name);
+    // A single-word name longer than 10 chars is likely two names glued together
+    if (!hasSpace && name.length > 10) {
+      nameWarning = "Name may be truncated — verify manually";
+    }
+    // Even shorter single-word names are suspicious if they look like two names
+    // e.g. all-caps with an obvious boundary (lowercase→uppercase rarely happens in NCTracks)
+    if (!hasSpace && name.length > 5 && /[a-z][A-Z]/.test(name)) {
+      nameWarning = "Name may be truncated — verify manually";
+    }
+  }
+
+  return { name, nameWarning };
 }
 
 // ─── Progress ───
@@ -465,16 +572,66 @@ async function navigateToEligibility() {
   try {
     await ensureTab();
     await chrome.tabs.update(state.tabId, { url: ELIGIBILITY_INQUIRY_URL });
-    await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+    // Fix 5: If page takes >15s, retry navigation once
+    try {
+      await waitForTabLoad(state.tabId, 15000);
+    } catch {
+      addLog("Page load slow (>15s) — retrying navigation once...");
+      await chrome.tabs.update(state.tabId, { url: ELIGIBILITY_INQUIRY_URL });
+      await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+    }
     await delay(2000);
 
-    // Verify we landed on the right page
-    const tab = await chrome.tabs.get(state.tabId);
-    const url = (tab.url || "").toLowerCase();
+    // Fix 6: If we just logged in within 15s, skip expiry detection entirely
+    const LOGIN_SUPPRESSION_MS = 15000;
+    if (state.lastLoginSuccessTime && (Date.now() - state.lastLoginSuccessTime) < LOGIN_SUPPRESSION_MS) {
+      addLog("Login suppression active (within 15s of login) — skipping session check.");
+      // Wait for form readiness instead
+      try {
+        await waitForEligibilityForm(state.tabId);
+        addLog("Eligibility page loaded — form confirmed present.");
+      } catch {
+        addLog("Eligibility page loaded but form field not confirmed — proceeding anyway.");
+      }
+      return;
+    }
 
-    if (url.includes("loginaction") || url.includes("ncid.nc.gov")) {
-      addLog("Redirected to login — session may have expired.");
+    // Verify we landed on the right page — with retry logic (Fix 1)
+    // When navigating between patients, a slow redirect can look like session expiry.
+    // Wait and re-check up to 3 times before concluding it's a true expiry.
+    const SESSION_CHECK_RETRIES = 3;
+    const SESSION_CHECK_DELAY_MS = 3000;
+    let confirmedExpired = false;
+
+    for (let check = 1; check <= SESSION_CHECK_RETRIES; check++) {
+      const tab = await chrome.tabs.get(state.tabId);
+      const url = (tab.url || "").toLowerCase();
+
+      if (url.includes("loginaction") || url.includes("ncid.nc.gov")) {
+        if (check < SESSION_CHECK_RETRIES) {
+          addLog(`Session check ${check}/${SESSION_CHECK_RETRIES}: redirected to login — waiting ${SESSION_CHECK_DELAY_MS / 1000}s to re-check...`);
+          await delay(SESSION_CHECK_DELAY_MS);
+          // Re-check the current URL (page may have recovered/redirected back)
+          continue;
+        }
+        // Final check still shows login page
+        confirmedExpired = true;
+      } else {
+        // Page recovered or was never expired
+        if (check > 1) {
+          addLog(`FALSE ALARM - RECOVERED on check ${check}/${SESSION_CHECK_RETRIES}`);
+          state.falseAlarmCount++;
+        }
+        break;
+      }
+    }
+
+    if (confirmedExpired) {
+      addLog("TRUE EXPIRY — session has expired after all re-checks.");
+      state.trueExpiryCount++;
       broadcastToPopup({ type: "sessionExpired" });
+      showNotification("Session Issue — NCTracks Verifier",
+        "Attempting to recover session... if this persists please check the NCTracks tab.");
 
       if (state.loginRetryCount < 2) {
         state.loginRetryCount++;
@@ -487,11 +644,33 @@ async function navigateToEligibility() {
       return;
     }
 
-    addLog("Eligibility page loaded.");
+    // Wait for the actual eligibility form input field to be present (Fix 2)
+    // Don't just trust page load — confirm the form is usable
+    try {
+      await waitForEligibilityForm(state.tabId);
+      addLog("Eligibility page loaded — form confirmed present.");
+    } catch {
+      addLog("Eligibility page loaded but form field not confirmed — proceeding anyway.");
+    }
   } catch (err) {
     addLog("Failed to navigate to eligibility page: " + err.message);
     broadcastError("tab_error", "Could not load eligibility page: " + err.message);
   }
+}
+
+// Wait for the actual eligibility form to be present on the page (Fix 2)
+async function waitForEligibilityForm(tabId, timeoutMs = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const result = await sendToTab(tabId, { action: "checkFormReady" });
+      if (result && result.formReady) return true;
+    } catch {
+      // Content script may not be ready yet
+    }
+    await delay(1000);
+  }
+  throw new Error("Eligibility form not detected within timeout");
 }
 
 // ─── EMR Orchestration ───
@@ -556,45 +735,35 @@ async function startFromEMR() {
       addLog("Already logged into EMR");
     }
 
-    // ── Navigate to Reports Page via Sidebar ──
-    addLog("=== Phase: EMR Scrape ===");
+    // ── Navigate to Funding Sources Report ──
+    addLog("=== Phase: EMR Scrape (Funding Sources) ===");
     state.status = "emr_scraping";
     saveState();
     broadcastToPopup({ type: "emrProgress", phase: "navigating", patientsFound: 0 });
 
-    addLog("Navigating to Client Reports via sidebar navigation...");
-    const navResult = await sendToTab(state.tabId, { action: "emrNavigateToReports" });
-    addLog(`Sidebar navigation result: status=${navResult.status}, url=${navResult.url || "?"}, pageType=${navResult.pageType || "?"}`);
-
-    if (navResult.status === "ERROR") {
-      // Fallback: try direct URL navigation as last resort
-      addLog(`Sidebar navigation failed: ${navResult.notes} — falling back to direct URL...`);
-      await chrome.tabs.update(state.tabId, { url: PASSAGEHEALTH_REPORTS_URL });
-      await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
-      await delay(EMR_PAGE_LOAD_DELAY_MS);
-    } else if (navResult.status === "PARTIAL") {
-      addLog(`Sidebar navigation partial — waiting extra time for page to settle...`);
-      await delay(EMR_PAGE_LOAD_DELAY_MS);
-    }
+    addLog("Navigating to Funding Sources report...");
+    await chrome.tabs.update(state.tabId, { url: PASSAGEHEALTH_FUNDING_SOURCES_URL });
+    await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+    await delay(EMR_PAGE_LOAD_DELAY_MS);
 
     // Verify we're on the reports page
     try {
       pageCheck = await sendToTab(state.tabId, { action: "emrCheckPage" });
-      addLog(`Reports page — type: ${pageCheck.pageType}, URL: ${pageCheck.url}`);
+      addLog(`Funding Sources page — type: ${pageCheck.pageType}, URL: ${pageCheck.url}`);
     } catch (err) {
-      addLog(`Could not verify reports page: ${err.message}`);
+      addLog(`Could not verify Funding Sources page: ${err.message}`);
     }
 
     if (pageCheck.pageType !== "reports") {
       addLog(`Warning: May not be on reports page (type=${pageCheck.pageType}). Attempting to continue anyway...`);
     }
 
-    // ── Apply Filters ──
-    addLog("Applying filters (Active status, funding sources)...");
+    // ── Apply Payer Filters ──
+    addLog("Applying Payer filters on Funding Sources report...");
     broadcastToPopup({ type: "emrProgress", phase: "filtering", patientsFound: 0 });
 
-    const filterResult = await sendToTab(state.tabId, { action: "emrApplyFilters" });
-    addLog(`Filter result: status=${filterResult.status}, statusApplied=${filterResult.statusApplied}, fundingApplied=${filterResult.fundingApplied}`);
+    const filterResult = await sendToTab(state.tabId, { action: "emrApplyPayerFilters" });
+    addLog(`Filter result: status=${filterResult.status}, payerApplied=${filterResult.payerApplied}`);
     if (filterResult.diagnostics) addLog(`Filter diagnostics: ${filterResult.diagnostics}`);
 
     // ── Scrape All Pages ──
@@ -608,7 +777,7 @@ async function startFromEMR() {
       broadcastToPopup({ type: "emrProgress", phase: "scraping", page: pageNum, patientsFound: allPatients.length });
 
       const scrapeResult = await sendToTab(state.tabId, { action: "emrScrapePage" });
-      addLog(`Page ${pageNum}: ${scrapeResult.patients ? scrapeResult.patients.length : 0} patients found (status: ${scrapeResult.status})`);
+      addLog(`Page ${pageNum}: ${scrapeResult.patients ? scrapeResult.patients.length : 0} clients found (status: ${scrapeResult.status})`);
 
       if (scrapeResult.patients && scrapeResult.patients.length > 0) {
         allPatients = allPatients.concat(scrapeResult.patients);
@@ -628,24 +797,35 @@ async function startFromEMR() {
       await delay(1000);
     }
 
-    // ── Deduplicate ──
+    // ── Deduplicate exact duplicates only (same patient + same payer = same row scraped twice) ──
+    // Keep rows where the same patient has different payers (two active insurances)
     const beforeDedup = allPatients.length;
-    const seen = new Map();
+    const seen = new Set();
+    const deduped = [];
     for (const p of allPatients) {
-      if (!seen.has(p.medicaid_id)) {
-        seen.set(p.medicaid_id, p);
+      const key = `${p.medicaid_id}|${(p.emr_funding_source || "").toLowerCase()}|${(p.insurance_type || "").toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(p);
       }
     }
-    allPatients = Array.from(seen.values());
-    addLog(`EMR scrape complete: ${beforeDedup} patients found across ${pageNum} pages`);
+    allPatients = deduped;
+    addLog(`EMR scrape complete: ${beforeDedup} rows found across ${pageNum} pages`);
     if (beforeDedup !== allPatients.length) {
-      addLog(`Deduplicated: ${beforeDedup} → ${allPatients.length} unique Medicaid IDs`);
+      addLog(`Removed ${beforeDedup - allPatients.length} exact duplicate rows → ${allPatients.length} rows remaining`);
+    }
+    const multiInsurance = allPatients.filter((p) => {
+      return allPatients.filter((q) => q.medicaid_id === p.medicaid_id).length > 1;
+    });
+    if (multiInsurance.length > 0) {
+      const uniqueMulti = new Set(multiInsurance.map((p) => p.medicaid_id));
+      addLog(`${uniqueMulti.size} clients have multiple active insurances (${multiInsurance.length} total rows)`);
     }
 
     broadcastToPopup({ type: "emrProgress", phase: "complete", patientsFound: allPatients.length });
 
     if (allPatients.length === 0) {
-      broadcastError("emr_scrape_failed", "No patients found in EMR report. Check filters and report data.");
+      broadcastError("emr_scrape_failed", "No clients found in Funding Sources report. Check filters and report data.");
       return;
     }
 
@@ -657,7 +837,7 @@ async function startFromEMR() {
     saveState();
 
     addLog(`=== Phase: NCTracks Login ===`);
-    addLog(`Proceeding to verify ${state.totalPatients} patients on NCTracks...`);
+    addLog(`Proceeding to verify ${state.totalPatients} clients on NCTracks...`);
     broadcastToPopup({ type: "emrProgress", phase: "nctracks", patientsFound: allPatients.length });
     sendProgress();
 
@@ -713,6 +893,7 @@ async function processNextPatient() {
           name: `${p.first_name || ""} ${p.last_name || ""}`.trim(),
           status: "SKIPPED",
           emr_funding_source: p.emr_funding_source || "",
+          insurance_type: p.insurance_type || "",
           managing_entity: "",
           managing_entity_next: "",
           current_period: "",
@@ -731,10 +912,12 @@ async function processNextPatient() {
     // Check if all done
     if (state.currentIndex >= state.patients.length) {
       const eligible = state.results.filter((r) => r.status === "ELIGIBLE" || r.status === "ACTIVE").length;
+      const errors = state.results.filter((r) => r.status === "ERROR").length;
+      const payerChanges = state.results.filter((r) => r.payer_changed_next === "YES").length;
       finishBatch(`Verification complete! ${state.results.length} patients processed.`);
       showNotification(
-        "Verification Complete",
-        `${state.results.length} patients processed. ${eligible} eligible.`
+        "Verification Complete — NCTracks Verifier",
+        `${state.results.length} patients processed. ${eligible} eligible. ${payerChanges} payer changes detected. ${errors} errors. Results exported.`
       );
       return;
     }
@@ -751,6 +934,27 @@ async function processNextPatient() {
         broadcastError("tab_error", "Lost browser tab and could not recover: " + err.message);
         return;
       }
+    }
+
+    // Fix 3: Proactive session health check every 5 patients
+    if (state.currentIndex > 0 && state.currentIndex % 5 === 0) {
+      addLog(`[Health Check] Patient ${state.currentIndex + 1} — verifying session before continuing...`);
+      let healthOk = false;
+      try {
+        const healthResult = await sendToTab(state.tabId, { action: "checkFormReady" });
+        healthOk = healthResult && healthResult.formReady;
+      } catch {
+        healthOk = false;
+      }
+      if (!healthOk) {
+        addLog("[Health Check] Session unhealthy — proactively re-logging in before failure.");
+        // Suppress expiry detection briefly (Fix 6)
+        state.loginRetryCount = 0;
+        processingActive = false;
+        await startLogin();
+        return; // Login flow will resume processing
+      }
+      addLog("[Health Check] Session healthy — continuing.");
     }
 
     const patient = state.patients[state.currentIndex];
@@ -826,6 +1030,7 @@ async function processNextPatient() {
             name: patientName,
             status: fillResult.status,
             emr_funding_source: patient.emr_funding_source || "",
+            insurance_type: patient.insurance_type || "",
             managing_entity: "",
             managing_entity_next: "",
             current_period: "",
@@ -893,7 +1098,39 @@ async function processNextPatient() {
               addLog(`  Could not scrape next period entity: ${scrapeErr.message}`);
             }
           } else if (selectResult.status === "NO_DROPDOWN") {
-            addLog("  No Period Selection dropdown found on results page.");
+            // Bug 4: Retry once — refresh page, re-submit, try again
+            addLog("  No Period Selection dropdown found — retrying once...");
+            try {
+              await navigateToEligibility();
+              const retryFill = await sendToTab(state.tabId, {
+                action: "fillAndCheck",
+                patient: patient,
+                config: state.config,
+              });
+              if (retryFill.submitted) {
+                await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+                await delay(3000);
+                const retrySelect = await sendToTab(state.tabId, { action: "selectNextPeriod" });
+                if (retrySelect.status === "CHANGING") {
+                  nextPeriod = retrySelect.nextPeriod || "";
+                  addLog(`  Retry succeeded — switching to next period: ${nextPeriod}`);
+                  await waitForTabLoad(state.tabId, TAB_LOAD_TIMEOUT_MS);
+                  await delay(3000);
+                  try {
+                    const retryEntity = await sendToTab(state.tabId, { action: "scrapeEntityOnly" });
+                    if (retryEntity.status === "OK") {
+                      nextEntity = retryEntity.managing_entity || "";
+                      if (retryEntity.coverage_dates) nextPeriod = retryEntity.coverage_dates;
+                      addLog(`  Next month (retry): ${nextEntity || "(none)"}${nextPeriod ? " | " + nextPeriod : ""}`);
+                    }
+                  } catch { /* ignore */ }
+                } else {
+                  addLog(`  Retry still no dropdown: ${retrySelect.status}`);
+                }
+              }
+            } catch (retryErr) {
+              addLog(`  Period dropdown retry failed: ${retryErr.message}`);
+            }
           } else if (selectResult.status === "NO_NEXT_PERIOD") {
             addLog("  No next month available in Period Selection.");
           } else {
@@ -904,28 +1141,63 @@ async function processNextPatient() {
         }
 
         const emrSource = patient.emr_funding_source || "";
-        const payerChanged = checkPayerChanged(emrSource, currentEntity);
-        const payerChangedNext = checkPayerChanged(emrSource, nextEntity);
-        if (emrSource) {
-          addLog(`  Payer check: EMR="${emrSource}" vs NCTracks="${currentEntity}" → ${payerChanged === "YES" ? "CHANGED" : payerChanged === "NO" ? "Match" : payerChanged}`);
+        // Bug 2: Compare current month entity vs next month entity (not EMR vs NCTracks)
+        let payerChangedNext = "NO";
+        if (currentEntity && nextEntity) {
+          payerChangedNext = currentEntity.toUpperCase() !== nextEntity.toUpperCase() ? "YES" : "NO";
+        } else if (!currentEntity && !nextEntity) {
+          payerChangedNext = "";
+        } else {
+          payerChangedNext = ""; // One is empty — can't compare
         }
+        // Keep EMR vs NCTracks comparison for reference
+        const payerChangedEmr = checkPayerChanged(emrSource, currentEntity);
+        if (emrSource) {
+          addLog(`  Payer check: EMR="${emrSource}" vs NCTracks="${currentEntity}" → ${payerChangedEmr === "YES" ? "CHANGED" : payerChangedEmr === "NO" ? "Match" : payerChangedEmr}`);
+        }
+        if (payerChangedNext === "YES") {
+          addLog(`  PAYER CHANGE DETECTED: ${currentEntity} → ${nextEntity}`);
+          // Bug 5: Fire desktop notification immediately on payer change
+          showNotification("Payer Change Detected — NCTracks Verifier",
+            `${result.recipient_name || patientName}: ${currentEntity} → ${nextEntity} next month.`);
+        }
+
+        // Bug 3: Classify empty entity
+        let finalStatus = result.status || "UNKNOWN";
+        if (!currentEntity && finalStatus !== "ERROR" && finalStatus !== "NOT FOUND") {
+          const planText = (result.benefit_plan || "").toUpperCase();
+          if (planText.includes("CARVE-OUT") || planText.includes("CARVE OUT") || planText === "MEDICAID") {
+            finalStatus = "FFS";
+            if (!currentEntity) addLog("  No managing entity — classified as FFS (Fee For Service)");
+          }
+        }
+        if (finalStatus === "UNKNOWN" && !currentEntity && !result.coverage_dates) {
+          finalStatus = "NOT FOUND";
+          addLog("  No coverage data — classified as NOT FOUND");
+        }
+
+        // Validate scraped name — strip label contamination, flag truncation
+        const validated = validateScrapedName(result.recipient_name, patientName);
+        const resultNotes = [result.notes, validated.nameWarning].filter(Boolean).join("; ");
 
         state.results.push({
           medicaid_id: patient.medicaid_id,
-          name: result.recipient_name || patientName,
-          status: result.status || "UNKNOWN",
+          name: validated.name,
+          status: finalStatus,
           emr_funding_source: emrSource,
-          managing_entity: currentEntity,
-          managing_entity_next: nextEntity,
+          insurance_type: patient.insurance_type || "",
+          managing_entity: currentEntity || "(none)",
+          managing_entity_next: nextEntity || "(none)",
           current_period: currentPeriod,
           next_period: nextPeriod,
-          payer_changed: payerChanged,
+          payer_changed: payerChangedEmr,
           payer_changed_next: payerChangedNext,
           checked_at: new Date().toISOString(),
-          notes: result.notes || "",
+          notes: resultNotes,
         });
 
-        addLog(`  Result: ${result.status} — ${result.recipient_name || ""} | Entity: ${currentEntity} | Next: ${nextEntity}${payerChanged ? " | PayerChanged: " + payerChanged : ""}`);
+        if (validated.nameWarning) addLog(`  ⚠ ${validated.nameWarning}: "${validated.name}"`);
+        addLog(`  Result: ${finalStatus} — ${validated.name || ""} | Entity: ${currentEntity || "(none)"} | Next: ${nextEntity || "(none)"}${payerChangedNext === "YES" ? " | PayerChanged: YES" : ""}`);
         succeeded = true;
         break;
       } catch (err) {
@@ -954,6 +1226,7 @@ async function processNextPatient() {
         name: patientName,
         status: "ERROR",
         emr_funding_source: patient.emr_funding_source || "",
+        insurance_type: patient.insurance_type || "",
         managing_entity: "",
         managing_entity_next: "",
         current_period: "",
@@ -963,6 +1236,9 @@ async function processNextPatient() {
         checked_at: new Date().toISOString(),
         notes: `Failed after ${MAX_RETRIES} attempts: ${lastError}`,
       });
+      // Part 2: Error notification (only after all retries failed)
+      showNotification("Error — NCTracks Verifier",
+        `Patient ${patientName || patient.medicaid_id} (${patient.medicaid_id}) failed after retry. Manual review needed.`);
     }
 
     state.currentIndex++;
@@ -975,8 +1251,9 @@ async function processNextPatient() {
       await navigateToEligibility();
     }
 
-    // Delay between patients
-    await delay(INTER_PATIENT_DELAY_MS);
+    // Fix 5: Randomized delay between patients (2-4 seconds)
+    const randomDelay = 2000 + Math.floor(Math.random() * 2000);
+    await delay(randomDelay);
     processingActive = false; // Release lock before next iteration
     processNextPatient();
   } catch (err) {
@@ -993,6 +1270,10 @@ function finishBatch(logMessage) {
   saveState();
   sendProgress();
   addLog(logMessage);
+  // Fix 1: Report session expiry stats
+  if (state.trueExpiryCount > 0 || state.falseAlarmCount > 0) {
+    addLog(`Session stats: ${state.trueExpiryCount} true expiries, ${state.falseAlarmCount} false alarms recovered.`);
+  }
   broadcastToPopup({ type: "complete", results: state.results });
   stopKeepalive();
 }
@@ -1051,13 +1332,51 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     state.mfaStartTime = Date.now();
     saveState();
     sendProgress();
-    addLog("MFA required — please complete verification in the browser tab.");
-    broadcastToPopup({ type: "mfaRequired" });
-    showNotification("MFA Required", "Please complete multi-factor authentication in the browser tab.");
+
+    // Fix 4: Log the exact interrupted patient
+    const interruptedPatient = state.patients[state.currentIndex];
+    const interruptedLabel = interruptedPatient
+      ? `patient ${state.currentIndex + 1}/${state.totalPatients} (${interruptedPatient.medicaid_id})`
+      : "unknown";
+    addLog(`MFA required — paused at ${interruptedLabel}`);
 
     // Set up keepalive and timeout
     startKeepalive();
     chrome.alarms.create("mfa-timeout", { delayInMinutes: MFA_TIMEOUT_MS / 60000 });
+
+    // Try auto-fill TOTP if secret is configured
+    chrome.storage.local.get(["savedTotpSecret"], async (data) => {
+      const secret = (data.savedTotpSecret || "").trim();
+      if (secret) {
+        try {
+          const code = await generateTOTP(secret);
+          addLog("TOTP code generated, auto-filling MFA...");
+          await sendToTab(state.tabId, { action: "fillMfa", code });
+          broadcastToPopup({ type: "mfaAutoFilled" });
+          return; // Don't show manual MFA prompt
+        } catch (err) {
+          addLog("TOTP auto-fill failed: " + err.message + " — falling back to manual.");
+        }
+      }
+      // No TOTP secret or generation failed — prompt user
+      addLog("MFA required — please complete verification in the browser tab.");
+      // Fix 4: Send banner info with patient context
+      broadcastToPopup({
+        type: "mfaRequired",
+        interruptedPatient: interruptedLabel,
+        currentIndex: state.currentIndex,
+        totalPatients: state.totalPatients,
+      });
+      showNotification("MFA Required — NCTracks Verifier",
+        "Please enter your MFA code in the NCTracks tab. Automation is paused.",
+        { requireInteraction: true });
+    });
+  }
+
+  if (msg.event === "mfaAutoFillFailed") {
+    addLog("TOTP auto-fill failed: " + (msg.reason || "unknown") + " — waiting for manual MFA.");
+    broadcastToPopup({ type: "mfaRequired" });
+    showNotification("MFA Required", "Auto-fill failed. Please complete MFA manually in the browser tab.");
   }
 
   if (msg.event === "loginComplete") {
@@ -1065,7 +1384,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     addLog("Login complete!");
     state.status = "processing"; // Set immediately to prevent re-entry
     state.loginRetryCount = 0;
+    state.lastLoginSuccessTime = Date.now(); // Fix 6: suppress expiry detection for 15s
     stopKeepalive();
+    // Fix 4: Notify about resume
+    const resumeLabel = state.patients[state.currentIndex]
+      ? `Resuming from patient ${state.currentIndex + 1} of ${state.totalPatients}.`
+      : "";
+    broadcastToPopup({ type: "mfaCompleted", resumeLabel });
+    showNotification("Login Successful — NCTracks Verifier",
+      `MFA complete. ${resumeLabel}`);
     navigateToEligibility().then(() => {
       processNextPatient();
     }).catch((err) => {
@@ -1144,6 +1471,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       lastErrorType: null,
       mfaStartTime: null,
       loginRetryCount: 0,
+      trueExpiryCount: 0,
+      falseAlarmCount: 0,
+      lastLoginSuccessTime: 0,
     };
 
     if (state.patients.length === 0) {
@@ -1184,6 +1514,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       lastErrorType: null,
       mfaStartTime: null,
       loginRetryCount: 0,
+      trueExpiryCount: 0,
+      falseAlarmCount: 0,
+      lastLoginSuccessTime: 0,
     };
 
     if (!state.emrCredentials.email || !state.emrCredentials.password) {
@@ -1208,8 +1541,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   if (msg.action === "stopVerification") {
     state.stopRequested = true;
-    addLog("Stop requested — will finish after current patient...");
+    addLog("Stop requested — will finish after current client...");
     sendResponse({ stopping: true });
+  }
+
+  if (msg.action === "abortVerification") {
+    addLog("ABORT — immediately stopping all processing.");
+    processingActive = false;
+    state.stopRequested = true;
+    state.status = "done";
+    stopKeepalive();
+    saveState();
+    sendProgress();
+    broadcastToPopup({ type: "complete", results: state.results, aborted: true });
+    showNotification("Verification Aborted", `Aborted after ${state.currentIndex} of ${state.totalPatients} clients.`);
+    sendResponse({ aborted: true });
   }
 
   if (msg.action === "getState") {
@@ -1287,13 +1633,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ saved: true });
   }
 
+  if (msg.action === "saveTotpSecret") {
+    chrome.storage.local.set({ savedTotpSecret: msg.secret });
+    sendResponse({ saved: true });
+  }
+
   if (msg.action === "loadCredentials") {
-    chrome.storage.local.get(["savedUsername", "savedPassword", "savedEmrEmail", "savedEmrPassword"], (data) => {
+    chrome.storage.local.get(["savedUsername", "savedPassword", "savedEmrEmail", "savedEmrPassword", "savedTotpSecret"], (data) => {
       sendResponse({
         username: data.savedUsername || "",
         password: data.savedPassword || "",
         emrEmail: data.savedEmrEmail || "",
         emrPassword: data.savedEmrPassword || "",
+        totpSecret: data.savedTotpSecret || "",
       });
     });
     return true; // async response
